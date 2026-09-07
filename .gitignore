@@ -1,0 +1,24 @@
+# סביבה וירטואלית וקבצים מקומיים
+.venv/
+venv/
+env/
+__pycache__/
+*.pyc
+*.pyo
+
+# פלטים מקומיים
+*.csv
+!requirements.txt
+
+# מערכת הפעלה / עורך
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# סודות של Streamlit (לא להעלות!)
+.streamlit/secrets.toml
+
+# פרויקטים אחרים בתיקייה שלא שייכים לאפליקציית המניות
+index.html
+stock-ta/
