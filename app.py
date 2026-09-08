@@ -102,6 +102,21 @@ def t(key: str, **kw) -> str:
     return s.format(**kw) if kw else s
 
 
+try:
+    from translations import DEEP as _DEEP
+except Exception:  # pragma: no cover
+    _DEEP = {}
+
+
+def L(he: str, **kw) -> str:
+    """תרגום עומק לפי מחרוזת המקור העברית. חסר / שפה=he -> מחזיר את המקור."""
+    if not he:
+        return he
+    lang = get_lang()
+    s = he if lang == "he" else _DEEP.get(he, {}).get(lang, he)
+    return s.format(**kw) if kw else s
+
+
 STRINGS: dict[str, dict[str, str]] = {
     # --- כותרת ראשית ---
     "app_title": {
@@ -733,70 +748,70 @@ def financial_sections(info: dict, price=None) -> dict:
     p_fcf = fmt(mcap / fcf) if (mcap and fcf) else "—"
 
     return {
-        "הערכת שווי (Valuation)": {
-            "שווי שוק": money("marketCap"),
-            "שווי מיזם (EV)": money("enterpriseValue"),
-            "מכפיל רווח נגרר (P/E)": num("trailingPE"),
-            "מכפיל רווח עתידי (Fwd P/E)": num("forwardPE"),
-            "מכפיל PEG": num("trailingPegRatio") if g("trailingPegRatio") else num("pegRatio"),
-            "מחיר / מכירות (P/S)": num("priceToSalesTrailing12Months"),
-            "מחיר / הון עצמי (P/B)": num("priceToBook"),
+        L("הערכת שווי (Valuation)"): {
+            L("שווי שוק"): money("marketCap"),
+            L("שווי מיזם (EV)"): money("enterpriseValue"),
+            L("מכפיל רווח נגרר (P/E)"): num("trailingPE"),
+            L("מכפיל רווח עתידי (Fwd P/E)"): num("forwardPE"),
+            L("מכפיל PEG"): num("trailingPegRatio") if g("trailingPegRatio") else num("pegRatio"),
+            L("מחיר / מכירות (P/S)"): num("priceToSalesTrailing12Months"),
+            L("מחיר / הון עצמי (P/B)"): num("priceToBook"),
             "EV / EBITDA": num("enterpriseToEbitda"),
-            "EV / הכנסות": num("enterpriseToRevenue"),
-            "מחיר / תזרים חופשי (P/FCF)": p_fcf,
+            L("EV / הכנסות"): num("enterpriseToRevenue"),
+            L("מחיר / תזרים חופשי (P/FCF)"): p_fcf,
         },
-        "רווחיות (Profitability)": {
-            "שולי רווח גולמי": pct("grossMargins"),
-            "שולי רווח תפעולי": pct("operatingMargins"),
-            "שולי רווח נקי": pct("profitMargins"),
-            "שולי EBITDA": pct("ebitdaMargins"),
-            "תשואה על ההון (ROE)": pct("returnOnEquity"),
-            "תשואה על הנכסים (ROA)": pct("returnOnAssets"),
+        L("רווחיות (Profitability)"): {
+            L("שולי רווח גולמי"): pct("grossMargins"),
+            L("שולי רווח תפעולי"): pct("operatingMargins"),
+            L("שולי רווח נקי"): pct("profitMargins"),
+            L("שולי EBITDA"): pct("ebitdaMargins"),
+            L("תשואה על ההון (ROE)"): pct("returnOnEquity"),
+            L("תשואה על הנכסים (ROA)"): pct("returnOnAssets"),
         },
-        "צמיחה (Growth)": {
-            "צמיחת הכנסות (שנתי)": pct("revenueGrowth"),
-            "צמיחת רווח (שנתי)": pct("earningsGrowth"),
-            "צמיחת רווח רבעוני (YoY)": pct("earningsQuarterlyGrowth"),
-            "הכנסות 12 חודשים": money("totalRevenue"),
-            "רווח נקי (12 ח')": money("netIncomeToCommon"),
+        L("צמיחה (Growth)"): {
+            L("צמיחת הכנסות (שנתי)"): pct("revenueGrowth"),
+            L("צמיחת רווח (שנתי)"): pct("earningsGrowth"),
+            L("צמיחת רווח רבעוני (YoY)"): pct("earningsQuarterlyGrowth"),
+            L("הכנסות 12 חודשים"): money("totalRevenue"),
+            L("רווח נקי (12 ח')"): money("netIncomeToCommon"),
             "EBITDA": money("ebitda"),
         },
-        "איתנות פיננסית (Balance Sheet)": {
-            "מזומן ושווי מזומן": money("totalCash"),
-            "חוב כולל": money("totalDebt"),
-            "חוב נטו": human_number((g("totalDebt") or 0) - (g("totalCash") or 0))
+        L("איתנות פיננסית (Balance Sheet)"): {
+            L("מזומן ושווי מזומן"): money("totalCash"),
+            L("חוב כולל"): money("totalDebt"),
+            L("חוב נטו"): human_number((g("totalDebt") or 0) - (g("totalCash") or 0))
             if (g("totalDebt") or g("totalCash")) else "—",
-            "יחס חוב להון (D/E)": num("debtToEquity"),
-            "יחס שוטף (Current)": num("currentRatio"),
-            "יחס מהיר (Quick)": num("quickRatio"),
-            "מזומן למניה": num("totalCashPerShare"),
-            "תזרים חופשי (FCF)": money("freeCashflow"),
-            "תזרים תפעולי": money("operatingCashflow"),
+            L("יחס חוב להון (D/E)"): num("debtToEquity"),
+            L("יחס שוטף (Current)"): num("currentRatio"),
+            L("יחס מהיר (Quick)"): num("quickRatio"),
+            L("מזומן למניה"): num("totalCashPerShare"),
+            L("תזרים חופשי (FCF)"): money("freeCashflow"),
+            L("תזרים תפעולי"): money("operatingCashflow"),
         },
-        "דיבידנד": {
-            "דיבידנד למניה (שנתי)": num("dividendRate"),
-            "תשואת דיבידנד": fmt(div_yield_frac, pct=True) if div_yield_frac is not None else "—",
-            "תשואה ממוצעת 5 שנים": fmt(div_5y, pct=True) if div_5y is not None else "—",
-            "יחס חלוקה (Payout)": pct("payoutRatio"),
+        L("דיבידנד"): {
+            L("דיבידנד למניה (שנתי)"): num("dividendRate"),
+            L("תשואת דיבידנד"): fmt(div_yield_frac, pct=True) if div_yield_frac is not None else "—",
+            L("תשואה ממוצעת 5 שנים"): fmt(div_5y, pct=True) if div_5y is not None else "—",
+            L("יחס חלוקה (Payout)"): pct("payoutRatio"),
         },
-        "תחזית אנליסטים": {
-            "המלצה": str(g("recommendationKey") or "—").upper(),
-            "מספר אנליסטים": num("numberOfAnalystOpinions", digits=0),
-            "מחיר יעד ממוצע": num("targetMeanPrice"),
-            "מחיר יעד גבוה": num("targetHighPrice"),
-            "מחיר יעד נמוך": num("targetLowPrice"),
-            "פוטנציאל מול מחיר נוכחי":
+        L("תחזית אנליסטים"): {
+            L("המלצה"): str(g("recommendationKey") or "—").upper(),
+            L("מספר אנליסטים"): num("numberOfAnalystOpinions", digits=0),
+            L("מחיר יעד ממוצע"): num("targetMeanPrice"),
+            L("מחיר יעד גבוה"): num("targetHighPrice"),
+            L("מחיר יעד נמוך"): num("targetLowPrice"),
+            L("פוטנציאל מול מחיר נוכחי"):
                 fmt((g("targetMeanPrice") / price - 1), pct=True)
                 if (g("targetMeanPrice") and price) else "—",
         },
-        "מניה ומסחר": {
-            "מניות במחזור": money("sharesOutstanding"),
-            "מניות חופשיות (Float)": money("floatShares"),
-            "אחזקת מוסדיים": pct("heldPercentInstitutions"),
-            "פוזיציות שורט (% מ-Float)": pct("shortPercentOfFloat"),
-            "בטא (Beta)": num("beta"),
-            "טווח 52 שבועות": f'{fmt(g("fiftyTwoWeekLow"))} – {fmt(g("fiftyTwoWeekHigh"))}',
-            "מחזור מסחר ממוצע": money("averageVolume"),
+        L("מניה ומסחר"): {
+            L("מניות במחזור"): money("sharesOutstanding"),
+            L("מניות חופשיות (Float)"): money("floatShares"),
+            L("אחזקת מוסדיים"): pct("heldPercentInstitutions"),
+            L("פוזיציות שורט (% מ-Float)"): pct("shortPercentOfFloat"),
+            L("בטא (Beta)"): num("beta"),
+            L("טווח 52 שבועות"): f'{fmt(g("fiftyTwoWeekLow"))} – {fmt(g("fiftyTwoWeekHigh"))}',
+            L("מחזור מסחר ממוצע"): money("averageVolume"),
         },
     }
 
@@ -812,17 +827,17 @@ def crypto_sections(info: dict, price=None) -> dict:
     supply = g("circulatingSupply")
     max_supply = g("maxSupply") or g("totalSupply")
     return {
-        "נתוני מטבע": {
-            "שווי שוק": human_number(g("marketCap")),
-            "היצע במחזור": human_number(supply),
-            "היצע מרבי / כולל": human_number(max_supply),
-            "אחוז מההיצע המרבי":
+        L("נתוני מטבע"): {
+            L("שווי שוק"): human_number(g("marketCap")),
+            L("היצע במחזור"): human_number(supply),
+            L("היצע מרבי / כולל"): human_number(max_supply),
+            L("אחוז מההיצע המרבי"):
                 fmt(supply / max_supply, pct=True) if (supply and max_supply) else "—",
-            "נפח מסחר 24 שעות":
+            L("נפח מסחר 24 שעות"):
                 human_number(g("volume24Hr") or g("regularMarketVolume") or g("volume")),
-            "מטבע התייחסות": g("currency") or "USD",
-            "אלגוריתם": g("algorithm") or "—",
-            "טווח 52 שבועות":
+            L("מטבע התייחסות"): g("currency") or "USD",
+            L("אלגוריתם"): g("algorithm") or "—",
+            L("טווח 52 שבועות"):
                 f'{fmt(g("fiftyTwoWeekLow"))} – {fmt(g("fiftyTwoWeekHigh"))}',
         }
     }
@@ -888,17 +903,21 @@ def _sec_ticker_map() -> dict:
 
 @st.cache_data(ttl=86400, show_spinner=False)
 def get_sec_facts(symbol: str):
-    """מחזיר (DataFrame שנתי לפי שנה, note). DataFrame ריק אם לא רלוונטי/נכשל."""
+    """מחזיר (DataFrame שנתי לפי שנה, (תבנית-הערה, ערך)). DataFrame ריק אם לא רלוונטי/נכשל.
+
+    ההערה מוחזרת כ-(מחרוזת עברית עם {x} אם צריך, ערך להצבה) כדי לאפשר תרגום ב-main.
+    """
     cik = _sec_ticker_map().get((symbol or "").upper())
     if not cik:
-        return pd.DataFrame(), "לא נמצאה חברה אמריקאית תואמת ב-SEC EDGAR (רלוונטי למניות בארה\"ב)."
+        return pd.DataFrame(), (
+            'לא נמצאה חברה אמריקאית תואמת ב-SEC EDGAR (רלוונטי למניות בארה"ב).', None)
     try:
         url = f"https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json"
         req = urllib.request.Request(url, headers=_SEC_UA)
         with urllib.request.urlopen(req, timeout=15) as resp:
             facts = json.loads(resp.read().decode("utf-8")).get("facts", {}).get("us-gaap", {})
     except Exception as err:  # noqa: BLE001
-        return pd.DataFrame(), f"קריאת SEC EDGAR נכשלה: {err}"
+        return pd.DataFrame(), ("קריאת SEC EDGAR נכשלה: {x}", err)
 
     def _annual_by_year(concept: dict, instant: bool) -> dict:
         # year -> (fy-of-filing, value); שנה מפתח = שנת סוף התקופה
@@ -954,14 +973,14 @@ def get_sec_facts(symbol: str):
             r["סך התחייבויות"] = r["סך נכסים"] - r["הון עצמי"]
 
     if not rows:
-        return pd.DataFrame(), "SEC EDGAR: לא נמצאו נתוני דוח שנתי במבנה צפוי."
+        return pd.DataFrame(), ("SEC EDGAR: לא נמצאו נתוני דוח שנתי במבנה צפוי.", None)
 
     years = sorted(rows)[-6:]
     table = pd.DataFrame(
         {str(y): rows[y] for y in years},
         index=[lbl for lbl, _, _ in _SEC_CONCEPTS],
     )
-    return table, f"מקור: SEC EDGAR · CIK {cik} · דוחות 10-K/20-F רשמיים."
+    return table, ("מקור: SEC EDGAR · CIK {x} · דוחות 10-K/20-F רשמיים.", cik)
 
 
 # ----------------------------------------------------------------------------
@@ -1046,18 +1065,24 @@ def technical_summary(df: pd.DataFrame):
     rows: list[dict] = []
     score = 0
 
+    C_IND, C_SIG, C_TXT = L("אינדיקטור"), L("איתות"), L("פירוש")
+
     def add(ok, label, bull, bear, neutral=None):
         nonlocal score
+        label = L(label)
         if ok is None:
-            rows.append({"אינדיקטור": label, "איתות": "—", "פירוש": "אין מספיק נתונים"})
+            rows.append({C_IND: label, C_SIG: "—", C_TXT: L("אין מספיק נתונים")})
         elif ok:
             score += 1
-            rows.append({"אינדיקטור": label, "איתות": "חיובי ▲", "פירוש": bull})
+            rows.append({C_IND: label, C_SIG: L("חיובי ▲"), C_TXT: L(bull)})
         elif ok is False:
             score -= 1
-            rows.append({"אינדיקטור": label, "איתות": "שלילי ▼", "פירוש": bear})
+            rows.append({C_IND: label, C_SIG: L("שלילי ▼"), C_TXT: L(bear)})
         else:  # "neutral"
-            rows.append({"אינדיקטור": label, "איתות": "ניטרלי ◆", "פירוש": neutral})
+            rows.append({C_IND: label, C_SIG: L("ניטרלי ◆"), C_TXT: L(neutral)})
+
+    def row(ind, sig, txt):
+        rows.append({C_IND: ind, C_SIG: sig, C_TXT: txt})
 
     sma50 = latest.get("SMA50")
     sma200 = latest.get("SMA200")
@@ -1086,64 +1111,59 @@ def technical_summary(df: pd.DataFrame):
         "ממוצע 50 מתחת לממוצע 200 — 'צלב מוות'")
 
     if is_num(rsi):
+        _ri = L("RSI (14) = {x}", x=f"{rsi:.1f}")
         if rsi < 30:
             score += 1
-            rows.append({"אינדיקטור": f"RSI (14) = {rsi:.1f}", "איתות": "חיובי ▲",
-                         "פירוש": "מכירת יתר — פוטנציאל לתיקון כלפי מעלה"})
+            row(_ri, L("חיובי ▲"), L("מכירת יתר — פוטנציאל לתיקון כלפי מעלה"))
         elif rsi > 70:
             score -= 1
-            rows.append({"אינדיקטור": f"RSI (14) = {rsi:.1f}", "איתות": "שלילי ▼",
-                         "פירוש": "קניית יתר — סיכון לתיקון כלפי מטה"})
+            row(_ri, L("שלילי ▼"), L("קניית יתר — סיכון לתיקון כלפי מטה"))
         else:
-            rows.append({"אינדיקטור": f"RSI (14) = {rsi:.1f}", "איתות": "ניטרלי ◆",
-                         "פירוש": "בטווח מאוזן (30–70)"})
+            row(_ri, L("ניטרלי ◆"), L("בטווח מאוזן (30–70)"))
     else:
-        rows.append({"אינדיקטור": "RSI (14)", "איתות": "—", "פירוש": "אין מספיק נתונים"})
+        row(L("RSI (14)"), "—", L("אין מספיק נתונים"))
 
     add(macd > macd_sig if (is_num(macd) and is_num(macd_sig)) else None,
         "MACD מול קו הסיגנל",
         "MACD מעל קו הסיגנל — מומנטום חיובי",
         "MACD מתחת לקו הסיגנל — מומנטום שלילי")
 
+    _bb = L("רצועות בולינגר")
     if is_num(bb_high) and is_num(bb_low):
         if price > bb_high:
             score -= 1
-            rows.append({"אינדיקטור": "רצועות בולינגר", "איתות": "שלילי ▼",
-                         "פירוש": "המחיר מעל הרצועה העליונה — מתיחות/קניית יתר"})
+            row(_bb, L("שלילי ▼"), L("המחיר מעל הרצועה העליונה — מתיחות/קניית יתר"))
         elif price < bb_low:
             score += 1
-            rows.append({"אינדיקטור": "רצועות בולינגר", "איתות": "חיובי ▲",
-                         "פירוש": "המחיר מתחת לרצועה התחתונה — מתיחות/מכירת יתר"})
+            row(_bb, L("חיובי ▲"), L("המחיר מתחת לרצועה התחתונה — מתיחות/מכירת יתר"))
         else:
-            rows.append({"אינדיקטור": "רצועות בולינגר", "איתות": "ניטרלי ◆",
-                         "פירוש": "המחיר בתוך הרצועות"})
+            row(_bb, L("ניטרלי ◆"), L("המחיר בתוך הרצועות"))
     else:
-        rows.append({"אינדיקטור": "רצועות בולינגר", "איתות": "—", "פירוש": "אין מספיק נתונים"})
+        row(_bb, "—", L("אין מספיק נתונים"))
 
     stoch_k = latest.get("STOCH_K")
     if is_num(stoch_k):
+        _sk = L("סטוכסטי %K = {x}", x=f"{stoch_k:.0f}")
         if stoch_k < 20:
             score += 1
-            rows.append({"אינדיקטור": f"סטוכסטי %K = {stoch_k:.0f}", "איתות": "חיובי ▲",
-                         "פירוש": "מכירת יתר (מתחת ל-20)"})
+            row(_sk, L("חיובי ▲"), L("מכירת יתר (מתחת ל-20)"))
         elif stoch_k > 80:
             score -= 1
-            rows.append({"אינדיקטור": f"סטוכסטי %K = {stoch_k:.0f}", "איתות": "שלילי ▼",
-                         "פירוש": "קניית יתר (מעל 80)"})
+            row(_sk, L("שלילי ▼"), L("קניית יתר (מעל 80)"))
         else:
-            rows.append({"אינדיקטור": f"סטוכסטי %K = {stoch_k:.0f}", "איתות": "ניטרלי ◆",
-                         "פירוש": "בטווח מאוזן (20–80)"})
+            row(_sk, L("ניטרלי ◆"), L("בטווח מאוזן (20–80)"))
 
     adx = latest.get("ADX")
     if is_num(adx):
-        strength = "מגמה חזקה" if adx >= 25 else ("מגמה חלשה/דשדוש" if adx < 20 else "מגמה מתגבשת")
-        rows.append({"אינדיקטור": f"ADX (14) = {adx:.0f}", "איתות": "מידע",
-                     "פירוש": f"{strength} — ADX מודד עוצמת מגמה, לא כיוון"})
+        strength = L("מגמה חזקה") if adx >= 25 else (
+            L("מגמה חלשה/דשדוש") if adx < 20 else L("מגמה מתגבשת"))
+        row(L("ADX (14) = {x}", x=f"{adx:.0f}"), L("מידע"),
+            L("{x} — ADX מודד עוצמת מגמה, לא כיוון", x=strength))
 
     atr_pct = latest.get("ATR_pct")
     if is_num(atr_pct):
-        rows.append({"אינדיקטור": f"ATR = {atr_pct:.1f}% מהמחיר", "איתות": "מידע",
-                     "פירוש": "תנודתיות יומית ממוצעת — שימושי לתמחור סטופ-לוס"})
+        row(L("ATR = {x}% מהמחיר", x=f"{atr_pct:.1f}"), L("מידע"),
+            L("תנודתיות יומית ממוצעת — שימושי לתמחור סטופ-לוס"))
 
     if score >= 2:
         verdict, icon, kind = "v_bullish", "🟢", "success"
@@ -1194,54 +1214,55 @@ def _horizon_short(df: pd.DataFrame):
     if is_num(bb_mid):
         if price > bb_mid:
             score += 1
-            reasons.append(("המחיר מעל ממוצע 20 יום", "▲"))
+            reasons.append((L("המחיר מעל ממוצע 20 יום"), "▲"))
         else:
             score -= 1
-            reasons.append(("המחיר מתחת לממוצע 20 יום", "▼"))
+            reasons.append((L("המחיר מתחת לממוצע 20 יום"), "▼"))
 
     hist = df["MACD_hist"].dropna()
     if len(hist) >= 2:
         if hist.iloc[-1] > 0 and hist.iloc[-1] >= hist.iloc[-2]:
             score += 1
-            reasons.append(("מומנטום MACD חיובי ומתחזק", "▲"))
+            reasons.append((L("מומנטום MACD חיובי ומתחזק"), "▲"))
         elif hist.iloc[-1] < 0 and hist.iloc[-1] <= hist.iloc[-2]:
             score -= 1
-            reasons.append(("מומנטום MACD שלילי ומתחזק כלפי מטה", "▼"))
+            reasons.append((L("מומנטום MACD שלילי ומתחזק כלפי מטה"), "▼"))
         else:
-            reasons.append(("מומנטום MACD מעורב", "◆"))
+            reasons.append((L("מומנטום MACD מעורב"), "◆"))
 
     rsi = latest.get("RSI")
     if is_num(rsi):
+        _r = f"{rsi:.0f}"
         if rsi < 30:
             score += 1
-            reasons.append((f"RSI = {rsi:.0f} — מכירת יתר, אפשרות לתיקון מעלה", "▲"))
+            reasons.append((L("RSI = {x} — מכירת יתר, אפשרות לתיקון מעלה", x=_r), "▲"))
         elif rsi > 70:
             score -= 1
-            reasons.append((f"RSI = {rsi:.0f} — קניית יתר, סיכון לתיקון מטה", "▼"))
+            reasons.append((L("RSI = {x} — קניית יתר, סיכון לתיקון מטה", x=_r), "▼"))
         elif rsi >= 50:
             score += 1
-            reasons.append((f"RSI = {rsi:.0f} — חיובי בלי קיצון", "▲"))
+            reasons.append((L("RSI = {x} — חיובי בלי קיצון", x=_r), "▲"))
         else:
-            reasons.append((f"RSI = {rsi:.0f} — חלש", "◆"))
+            reasons.append((L("RSI = {x} — חלש", x=_r), "◆"))
 
     chg5 = _series_change(df["Close"], 5)
     if chg5 is not None:
         if chg5 > 2:
             score += 1
-            reasons.append((f"עלייה של {chg5:+.1f}% ב-5 ימי מסחר אחרונים", "▲"))
+            reasons.append((L("עלייה של {x}% ב-5 ימי מסחר אחרונים", x=f"{chg5:+.1f}"), "▲"))
         elif chg5 < -2:
             score -= 1
-            reasons.append((f"ירידה של {chg5:+.1f}% ב-5 ימי מסחר אחרונים", "▼"))
+            reasons.append((L("ירידה של {x}% ב-5 ימי מסחר אחרונים", x=f"{chg5:+.1f}"), "▼"))
 
     bb_high, bb_low = latest.get("BB_high"), latest.get("BB_low")
     if is_num(bb_high) and is_num(bb_low) and bb_high > bb_low:
         pctb = (price - bb_low) / (bb_high - bb_low)
         if pctb < 0.2:
             score += 1
-            reasons.append(("המחיר קרוב לרצועת בולינגר התחתונה", "▲"))
+            reasons.append((L("המחיר קרוב לרצועת בולינגר התחתונה"), "▲"))
         elif pctb > 0.9:
             score -= 1
-            reasons.append(("המחיר קרוב לרצועת בולינגר העליונה", "▼"))
+            reasons.append((L("המחיר קרוב לרצועת בולינגר העליונה"), "▼"))
 
     return score, reasons
 
@@ -1257,46 +1278,46 @@ def _horizon_medium(df: pd.DataFrame):
         if is_num(sma):
             if price > sma:
                 score += 1
-                reasons.append((f"המחיר מעל ממוצע {win} יום", "▲"))
+                reasons.append((L("המחיר מעל ממוצע {x} יום", x=win), "▲"))
             else:
                 score -= 1
-                reasons.append((f"המחיר מתחת לממוצע {win} יום", "▼"))
+                reasons.append((L("המחיר מתחת לממוצע {x} יום", x=win), "▼"))
 
     sl = _slope(df["SMA50"], 10)
     if sl is not None:
         if sl > 0:
             score += 1
-            reasons.append(("ממוצע 50 יום במגמת עלייה", "▲"))
+            reasons.append((L("ממוצע 50 יום במגמת עלייה"), "▲"))
         else:
             score -= 1
-            reasons.append(("ממוצע 50 יום במגמת ירידה", "▼"))
+            reasons.append((L("ממוצע 50 יום במגמת ירידה"), "▼"))
 
     sma50, sma100 = latest.get("SMA50"), latest.get("SMA100")
     if is_num(sma50) and is_num(sma100):
         if sma50 > sma100:
             score += 1
-            reasons.append(("ממוצע 50 מעל ממוצע 100", "▲"))
+            reasons.append((L("ממוצע 50 מעל ממוצע 100"), "▲"))
         else:
             score -= 1
-            reasons.append(("ממוצע 50 מתחת לממוצע 100", "▼"))
+            reasons.append((L("ממוצע 50 מתחת לממוצע 100"), "▼"))
 
     macd = latest.get("MACD")
     if is_num(macd):
         if macd > 0:
             score += 1
-            reasons.append(("MACD מעל קו האפס", "▲"))
+            reasons.append((L("MACD מעל קו האפס"), "▲"))
         else:
             score -= 1
-            reasons.append(("MACD מתחת לקו האפס", "▼"))
+            reasons.append((L("MACD מתחת לקו האפס"), "▼"))
 
     chg21 = _series_change(df["Close"], 21)
     if chg21 is not None:
         if chg21 > 3:
             score += 1
-            reasons.append((f"עלייה של {chg21:+.1f}% בחודש האחרון", "▲"))
+            reasons.append((L("עלייה של {x}% בחודש האחרון", x=f"{chg21:+.1f}"), "▲"))
         elif chg21 < -3:
             score -= 1
-            reasons.append((f"ירידה של {chg21:+.1f}% בחודש האחרון", "▼"))
+            reasons.append((L("ירידה של {x}% בחודש האחרון", x=f"{chg21:+.1f}"), "▼"))
 
     return score, reasons
 
@@ -1311,62 +1332,63 @@ def _horizon_long(df: pd.DataFrame, info: dict, pe):
     if is_num(sma200):
         if price > sma200:
             score += 1
-            reasons.append(("המחיר מעל ממוצע 200 יום", "▲"))
+            reasons.append((L("המחיר מעל ממוצע 200 יום"), "▲"))
         else:
             score -= 1
-            reasons.append(("המחיר מתחת לממוצע 200 יום", "▼"))
+            reasons.append((L("המחיר מתחת לממוצע 200 יום"), "▼"))
         if price > sma200 * 1.4:
             score -= 1
-            reasons.append(("המחיר מתוח מאוד מעל ממוצע 200 יום (סיכון תיקון)", "▼"))
+            reasons.append((L("המחיר מתוח מאוד מעל ממוצע 200 יום (סיכון תיקון)"), "▼"))
 
     sma50 = latest.get("SMA50")
     if is_num(sma50) and is_num(sma200):
         if sma50 > sma200:
             score += 1
-            reasons.append(("'צלב זהב' — ממוצע 50 מעל ממוצע 200", "▲"))
+            reasons.append((L("'צלב זהב' — ממוצע 50 מעל ממוצע 200"), "▲"))
         else:
             score -= 1
-            reasons.append(("'צלב מוות' — ממוצע 50 מתחת לממוצע 200", "▼"))
+            reasons.append((L("'צלב מוות' — ממוצע 50 מתחת לממוצע 200"), "▼"))
 
     sl = _slope(df["SMA200"], 21)
     if sl is not None:
         if sl > 0:
             score += 1
-            reasons.append(("ממוצע 200 יום במגמת עלייה", "▲"))
+            reasons.append((L("ממוצע 200 יום במגמת עלייה"), "▲"))
         else:
             score -= 1
-            reasons.append(("ממוצע 200 יום במגמת ירידה", "▼"))
+            reasons.append((L("ממוצע 200 יום במגמת ירידה"), "▼"))
 
     hi = info.get("fiftyTwoWeekHigh")
     lo = info.get("fiftyTwoWeekLow")
     if is_num(hi) and hi and price >= hi * 0.85:
         score += 1
-        reasons.append(("קרוב לשיא 52 שבועות — מגמה חזקה", "▲"))
+        reasons.append((L("קרוב לשיא 52 שבועות — מגמה חזקה"), "▲"))
     elif is_num(lo) and lo and price <= lo * 1.1:
         score -= 1
-        reasons.append(("קרוב לשפל 52 שבועות — חולשה", "▼"))
+        reasons.append((L("קרוב לשפל 52 שבועות — חולשה"), "▼"))
 
     if pe is not None:
+        _p = f"{pe:.0f}"
         if pe <= 0:
             score -= 1
-            reasons.append(("החברה מפסידה (P/E שלילי)", "▼"))
+            reasons.append((L("החברה מפסידה (P/E שלילי)"), "▼"))
         elif pe <= 25:
             score += 1
-            reasons.append((f"מכפיל רווח סביר (P/E ≈ {pe:.0f})", "▲"))
+            reasons.append((L("מכפיל רווח סביר (P/E ≈ {x})", x=_p), "▲"))
         elif pe <= 40:
-            reasons.append((f"מכפיל רווח גבוה (P/E ≈ {pe:.0f})", "◆"))
+            reasons.append((L("מכפיל רווח גבוה (P/E ≈ {x})", x=_p), "◆"))
         else:
             score -= 1
-            reasons.append((f"מכפיל רווח גבוה מאוד (P/E ≈ {pe:.0f})", "▼"))
+            reasons.append((L("מכפיל רווח גבוה מאוד (P/E ≈ {x})", x=_p), "▼"))
 
     peg = info.get("pegRatio")
     if is_num(peg):
         if 0 < peg < 1:
             score += 1
-            reasons.append((f"PEG ≈ {peg:.2f} — צמיחה אטרקטיבית מול המחיר", "▲"))
+            reasons.append((L("PEG ≈ {x} — צמיחה אטרקטיבית מול המחיר", x=f"{peg:.2f}"), "▲"))
         elif peg > 2.5:
             score -= 1
-            reasons.append((f"PEG ≈ {peg:.2f} — יקר יחסית לצמיחה", "▼"))
+            reasons.append((L("PEG ≈ {x} — יקר יחסית לצמיחה", x=f"{peg:.2f}"), "▼"))
 
     return score, reasons
 
@@ -1973,31 +1995,31 @@ def main() -> None:
         st.warning(t("disc_reco"))
 
     # --- נתונים פיננסיים ---
+    _PARAM, _VAL = L("פרמטר"), L("ערך")
     with tab_fund:
         if crypto:
-            st.subheader(f"נתוני מטבע — {company_name}")
-            st.info(
+            st.subheader(L("נתוני מטבע — {a}", a=company_name))
+            st.info(L(
                 "מדובר במטבע קריפטו. נתוני יסוד של חברה (מכפיל רווח, דוחות כספיים, "
                 "תחזיות אנליסטים, SEC) אינם רלוונטיים; מוצגים נתוני היצע, שווי שוק ונפח מסחר."
-            )
+            ))
             for title, rows in crypto_sections(info, price).items():
                 vals = [str(v) for v in rows.values()]
                 with st.expander(title, expanded=True):
-                    st.table(pd.DataFrame({"פרמטר": list(rows), "ערך": vals}).set_index("פרמטר"))
-            st.caption(
-                f"מקורות: נתוני מחיר ומטבע — {price_source or 'Yahoo Finance'} "
-                "(CoinMarketCap דרך yfinance). ניתוח טכני מלא זמין בכרטיסייה 'ניתוח טכני'."
-            )
+                    st.table(pd.DataFrame({_PARAM: list(rows), _VAL: vals}).set_index(_PARAM))
+            st.caption(L(
+                "מקורות: נתוני מחיר ומטבע — {a} (CoinMarketCap דרך yfinance). "
+                "ניתוח טכני מלא זמין בכרטיסייה 'ניתוח טכני'.", a=price_source or "Yahoo Finance"))
         else:
-            st.subheader("נתונים פיננסיים")
+            st.subheader(L("נתונים פיננסיים"))
 
             c1, c2 = st.columns(2)
             c3, c4 = st.columns(2)
-            c1.metric("מכפיל רווח (P/E)", fmt(pe) if pe else "—")
-            c2.metric("שווי שוק", human_number(info.get("marketCap")))
-            c3.metric("רווח למניה (EPS)", fmt(info.get("trailingEps")))
+            c1.metric(t("m_pe"), fmt(pe) if pe else "—")
+            c2.metric(t("m_mcap"), human_number(info.get("marketCap")))
+            c3.metric(t("m_eps"), fmt(info.get("trailingEps")))
             _tgt = info.get("targetMeanPrice")
-            c4.metric("מחיר יעד ממוצע", price_str(_tgt, currency) if _tgt else "—",
+            c4.metric(t("m_target"), price_str(_tgt, currency) if _tgt else "—",
                       f"{(_tgt / price - 1) * 100:+.1f}%" if (_tgt and price) else None)
 
             st.markdown(
@@ -2006,67 +2028,66 @@ def main() -> None:
             )
 
             sections = financial_sections(info, price)
+            _val_first = list(sections)[0] if sections else ""
             for title, rows in sections.items():
                 vals = [str(v) for v in rows.values()]
                 if all(v in ("—", "nan", "None", "") for v in vals):
                     continue
-                with st.expander(title, expanded=title.startswith("הערכת שווי")):
-                    st.table(pd.DataFrame({"פרמטר": list(rows), "ערך": vals}).set_index("פרמטר"))
+                with st.expander(title, expanded=(title == _val_first)):
+                    st.table(pd.DataFrame({_PARAM: list(rows), _VAL: vals}).set_index(_PARAM))
 
             if not info or len(info) < 5:
-                st.warning(
-                    "Yahoo Finance החזיר מידע חברה חלקי או ריק. נסה שוב בעוד דקה, "
-                    "או ראה את מקור SEC EDGAR למטה (למניות ארה\"ב)."
-                )
+                st.warning(L(
+                    'Yahoo Finance החזיר מידע חברה חלקי או ריק. נסה שוב בעוד דקה, '
+                    'או ראה את מקור SEC EDGAR למטה (למניות ארה"ב).'))
 
             # --- מקור עצמאי #2: SEC EDGAR ---
-            st.markdown("### 🏛️ מקור עצמאי: SEC EDGAR (דוחות רשמיים)")
-            sec_df, sec_note = get_sec_facts(symbol)
+            st.markdown(L("### 🏛️ מקור עצמאי: SEC EDGAR (דוחות רשמיים)"))
+            sec_df, (sec_tpl, sec_val) = get_sec_facts(symbol)
             if sec_df is not None and not sec_df.empty:
-                show = sec_df.map(lambda v: human_number(v) if isinstance(v, (int, float)) else v)
+                show = (sec_df.rename(index=lambda x: L(x))
+                        .map(lambda v: human_number(v) if isinstance(v, (int, float)) else v))
                 st.table(show)
-            st.caption(sec_note)
+            st.caption(L(sec_tpl, x=sec_val) if sec_val is not None else L(sec_tpl))
 
             # --- דוחות כספיים מלאים (yfinance) ---
-            st.markdown("### 📑 דוחות כספיים מלאים")
+            st.markdown(L("### 📑 דוחות כספיים מלאים"))
             statements = get_statements(symbol)
             if statements:
                 for label, sdf in statements.items():
-                    with st.expander(label):
+                    with st.expander(L(label)):
                         show = sdf.map(
                             lambda v: human_number(v)
                             if isinstance(v, (int, float)) and pd.notna(v) else v
                         )
                         st.dataframe(show, use_container_width=True)
             else:
-                st.caption("לא התקבלו דוחות כספיים עבור סימול זה.")
+                st.caption(L("לא התקבלו דוחות כספיים עבור סימול זה."))
 
-            st.caption(
-                f"מקורות: נתוני מחיר — {price_source or 'Yahoo Finance'} · "
-                "מכפילים ותחזיות — Yahoo Finance · דוחות רשמיים — SEC EDGAR (data.sec.gov). "
-                "ערכים ממקורות שונים עשויים להיות מעודכנים לתאריכים שונים."
-            )
+            st.caption(L(
+                "מקורות: נתוני מחיר — {a} · מכפילים ותחזיות — Yahoo Finance · "
+                "דוחות רשמיים — SEC EDGAR (data.sec.gov). "
+                "ערכים ממקורות שונים עשויים להיות מעודכנים לתאריכים שונים.",
+                a=price_source or "Yahoo Finance"))
 
     # --- ניתוח טכני ---
     with tab_tech:
         getattr(st, kind)(t("tech_summary_line", icon=icon, v=verdict_txt, s=f"{score:+d}"))
         st.caption(t("tech_caption"))
-        if t("i18n_partial"):
-            st.caption(t("i18n_partial"))
 
         st.markdown(t("tech_values_head"))
         tech_vals = {
-            "מחיר סגירה אחרון": fmt(latest["Close"]),
-            "ממוצע נע 50": fmt(latest["SMA50"]),
-            "ממוצע נע 100": fmt(latest["SMA100"]),
-            "ממוצע נע 200": fmt(latest["SMA200"]),
+            L("מחיר סגירה אחרון"): fmt(latest["Close"]),
+            L("ממוצע נע 50"): fmt(latest["SMA50"]),
+            L("ממוצע נע 100"): fmt(latest["SMA100"]),
+            L("ממוצע נע 200"): fmt(latest["SMA200"]),
             "RSI (14)": fmt(latest["RSI"]),
             "MACD": fmt(latest["MACD"], digits=3),
-            "קו סיגנל MACD": fmt(latest["MACD_signal"], digits=3),
-            "היסטוגרמת MACD": fmt(latest["MACD_hist"], digits=3),
-            "בולינגר — עליון": fmt(latest["BB_high"]),
-            "בולינגר — אמצע": fmt(latest["BB_mid"]),
-            "בולינגר — תחתון": fmt(latest["BB_low"]),
+            L("קו סיגנל MACD"): fmt(latest["MACD_signal"], digits=3),
+            L("היסטוגרמת MACD"): fmt(latest["MACD_hist"], digits=3),
+            L("בולינגר — עליון"): fmt(latest["BB_high"]),
+            L("בולינגר — אמצע"): fmt(latest["BB_mid"]),
+            L("בולינגר — תחתון"): fmt(latest["BB_low"]),
         }
         for label, key, dg in (
             ("סטוכסטי %K", "STOCH_K", 1), ("סטוכסטי %D", "STOCH_D", 1),
@@ -2075,10 +2096,10 @@ def main() -> None:
             ("OBV — מאזן נפח", "OBV", 0),
         ):
             if key in latest and is_num(latest.get(key)):
-                tech_vals[label] = (human_number(latest[key]) if key == "OBV"
-                                    else fmt(latest[key], digits=dg))
+                tech_vals[L(label)] = (human_number(latest[key]) if key == "OBV"
+                                       else fmt(latest[key], digits=dg))
         tech_df = pd.DataFrame(
-            {"אינדיקטור": list(tech_vals.keys()), "ערך": list(tech_vals.values())}
+            {L("אינדיקטור"): list(tech_vals.keys()), L("ערך"): list(tech_vals.values())}
         )
         st.dataframe(tech_df, hide_index=True, use_container_width=True)
 

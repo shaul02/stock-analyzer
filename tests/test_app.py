@@ -81,6 +81,29 @@ def test_i18n_all_keys_have_three_langs():
             assert isinstance(d[lg], str), (key, lg)
 
 
+def test_deep_translations_wellformed():
+    import translations
+    for src, d in translations.DEEP.items():
+        assert set(d) >= {"en", "ru"}, src
+        for lg in ("en", "ru"):
+            assert isinstance(d[lg], str) and d[lg], (src, lg)
+            # placeholders must match between source and translation
+            src_ph = sorted(p for p in ("{x}", "{a}") if p in src)
+            assert sorted(p for p in ("{x}", "{a}") if p in d[lg]) == src_ph, src
+
+
+def test_L_helper(monkeypatch):
+    monkeypatch.setattr(app, "get_lang", lambda: "he")
+    assert app.L("הכנסות") == "הכנסות"
+    assert app.L("עלייה של {x}% בחודש האחרון", x="5.0") == "עלייה של 5.0% בחודש האחרון"
+    monkeypatch.setattr(app, "get_lang", lambda: "en")
+    assert app.L("הכנסות") == "Revenue"
+    assert app.L("עלייה של {x}% בחודש האחרון", x="5.0") == "Up 5.0% over the past month"
+    monkeypatch.setattr(app, "get_lang", lambda: "ru")
+    assert app.L("הכנסות") == "Выручка"
+    assert app.L("מפתח שלא קיים בכלל") == "מפתח שלא קיים בכלל"  # missing -> source
+
+
 def test_support_resistance_and_trendlines(df_long):
     lv = app.support_resistance(df_long)
     assert isinstance(lv, list) and all(isinstance(x, float) for x in lv)
