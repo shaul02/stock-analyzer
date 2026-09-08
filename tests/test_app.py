@@ -54,7 +54,10 @@ def test_technical_summary(df_long):
     verdict, icon, kind, score, rows = app.technical_summary(df_long)
     assert kind in {"success", "error", "info"}
     assert len(rows) >= 7
-    assert any(w in verdict for w in ("Bullish", "Bearish", "Neutral"))
+    assert verdict in {"v_bullish", "v_bearish", "v_neutral"}
+    # every verdict key resolves in all 3 languages
+    for lg in ("he", "en", "ru"):
+        assert app.STRINGS[verdict][lg]
 
 
 @pytest.mark.parametrize("info,pe", [
@@ -64,10 +67,27 @@ def test_technical_summary(df_long):
 def test_buy_recommendation(df_long, info, pe):
     r = app.buy_recommendation(df_long, info, pe)
     assert r["kind"] in {"success", "error", "info"}
-    assert set(r["horizons"]) == {"קצר", "בינוני", "ארוך"}
+    assert r["answer_key"] in {"reco_yes", "reco_no", "reco_unclear"}
+    assert set(r["horizons"]) == {"short", "medium", "long"}
     for h in r["horizons"].values():
         assert isinstance(h["score"], int)
-        assert h["label"] in {"חיובי", "שלילי", "ניטרלי"}
+        assert h["status"] in {"pos", "neg", "neu"}
+
+
+def test_i18n_all_keys_have_three_langs():
+    for key, d in app.STRINGS.items():
+        assert set(d) >= {"he", "en", "ru"}, key
+        for lg in ("he", "en", "ru"):
+            assert isinstance(d[lg], str), (key, lg)
+
+
+def test_support_resistance_and_trendlines(df_long):
+    lv = app.support_resistance(df_long)
+    assert isinstance(lv, list) and all(isinstance(x, float) for x in lv)
+    tl = app.trendlines(df_long)
+    assert set(tl) <= {"support", "resistance"}
+    for seg in tl.values():
+        assert len(seg["x"]) == 2 and len(seg["y"]) == 2
 
 
 def test_buy_recommendation_short_series_no_crash(df_short):

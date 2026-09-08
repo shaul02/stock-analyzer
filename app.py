@@ -20,6 +20,7 @@ import time
 import urllib.parse
 import urllib.request
 
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
@@ -30,17 +31,20 @@ from ta.trend import ADXIndicator, MACD, SMAIndicator
 from ta.volatility import AverageTrueRange, BollingerBands
 from ta.volume import OnBalanceVolumeIndicator
 
-# עיצוב בסיסי: יישור מימין לשמאל לעברית.
+# עיצוב בסיסי. הכיוון (rtl/ltr) נקבע לפי שפת הממשק.
 # חשוב: לא לגעת ב-.stApp / stAppViewContainer עצמם — RTL עליהם שובר את
-# אנימציית פתיחה/סגירה של סרגל הצד. מחילים RTL רק על תוכן הראשי ותוכן הסיידבר.
-_BASE_CSS = """
-      [data-testid="stMain"], section.main, .main { direction: rtl; }
+# אנימציית פתיחה/סגירה של סרגל הצד. מחילים כיוון רק על תוכן הראשי ותוכן הסיידבר.
+def _base_css(rtl: bool) -> str:
+    d = "rtl" if rtl else "ltr"
+    align = "right" if rtl else "left"
+    return f"""
+      [data-testid="stMain"], section.main, .main {{ direction: {d}; }}
       [data-testid="stMain"] h1, [data-testid="stMain"] h2, [data-testid="stMain"] h3,
       [data-testid="stMain"] h4, [data-testid="stMain"] p, [data-testid="stMain"] label,
-      [data-testid="stMain"] .stMarkdown { text-align: right; }
-      [data-testid="stMetric"] { direction: ltr; text-align: left; }
-      [data-testid="stTable"], [data-testid="stDataFrame"] { direction: ltr; }
-      [data-testid="stSidebarUserContent"] { direction: rtl; text-align: right; }
+      [data-testid="stMain"] .stMarkdown {{ text-align: {align}; }}
+      [data-testid="stMetric"] {{ direction: ltr; text-align: left; }}
+      [data-testid="stTable"], [data-testid="stDataFrame"] {{ direction: ltr; }}
+      [data-testid="stSidebarUserContent"] {{ direction: {d}; text-align: {align}; }}
 """
 
 # שכבת מצב לילה — נדרסת רק כשהמשתמש מדליק אותה
@@ -74,8 +78,336 @@ _DARK_CSS = """
 """
 
 
-def _page_css(dark: bool) -> str:
-    return f"<style>{_BASE_CSS}{_DARK_CSS if dark else ''}</style>"
+def _page_css(dark: bool, rtl: bool = True) -> str:
+    return f"<style>{_base_css(rtl)}{_DARK_CSS if dark else ''}</style>"
+
+
+# ----------------------------------------------------------------------------
+# רב-לשוני (עברית / אנגלית / רוסית). עברית = ברירת מחדל.
+# ----------------------------------------------------------------------------
+LANGS = {"he": "עברית", "en": "English", "ru": "Русский"}
+
+
+def get_lang() -> str:
+    return st.session_state.get("lang", "he")
+
+
+def is_rtl() -> bool:
+    return get_lang() == "he"
+
+
+def t(key: str, **kw) -> str:
+    d = STRINGS.get(key, {})
+    s = d.get(get_lang()) or d.get("he") or key
+    return s.format(**kw) if kw else s
+
+
+STRINGS: dict[str, dict[str, str]] = {
+    # --- כותרת ראשית ---
+    "app_title": {
+        "he": "📈 מנתח מניות — ניתוח טכני ופיננסי",
+        "en": "📈 Stock Analyzer — Technical & Fundamental",
+        "ru": "📈 Анализатор акций — теханализ и фундамент",
+    },
+    "app_caption": {
+        "he": "כל הנתונים מגיעים מ-Yahoo Finance דרך הספרייה החינמית yfinance. "
+              "אין צורך במפתח API ואין שום שירות בתשלום.",
+        "en": "All data comes from Yahoo Finance via the free yfinance library. "
+              "No API key, no paid services.",
+        "ru": "Все данные — из Yahoo Finance через бесплатную библиотеку yfinance. "
+              "Без API-ключа и платных сервисов.",
+    },
+    # --- סרגל הצד ---
+    "sb_display": {"he": "⚙️ הגדרות תצוגה", "en": "⚙️ Display settings", "ru": "⚙️ Настройки отображения"},
+    "sb_language": {"he": "🌐 שפה", "en": "🌐 Language", "ru": "🌐 Язык"},
+    "sb_dark": {"he": "🌙 מצב לילה", "en": "🌙 Dark mode", "ru": "🌙 Тёмная тема"},
+    "sb_chart_type": {"he": "סוג גרף מחיר", "en": "Price chart type", "ru": "Тип графика цены"},
+    "sb_line": {"he": "קו", "en": "Line", "ru": "Линия"},
+    "sb_candle": {"he": "נרות יפניים", "en": "Candlesticks", "ru": "Свечи"},
+    "sb_compact": {
+        "he": "📱 גרף קומפקטי (לטלפון)", "en": "📱 Compact chart (mobile)",
+        "ru": "📱 Компактный график (моб.)",
+    },
+    "sb_compact_help": {
+        "he": "גרפים נמוכים יותר, פחות היסטוריה — נוח לצפייה בטלפון.",
+        "en": "Shorter charts, less history — easier to view on a phone.",
+        "ru": "Более низкие графики, меньше истории — удобно на телефоне.",
+    },
+    "sb_overlays": {
+        "he": "📐 תמיכה/התנגדות + קווי מגמה אוטומטיים",
+        "en": "📐 Auto support/resistance + trendlines",
+        "ru": "📐 Авто уровни поддержки/сопротивления + тренды",
+    },
+    "sb_overlays_help": {
+        "he": "מזהה רמות מחיר חוזרות וקווי מגמה ומצייר אותם על גרף המחיר. "
+              "אפשר גם לצייר קווים משלך בעזרת סרגל הכלים של הגרף.",
+        "en": "Detects repeated price levels and trendlines and draws them on the price chart. "
+              "You can also draw your own lines with the chart toolbar.",
+        "ru": "Находит повторяющиеся ценовые уровни и линии тренда и рисует их. "
+              "Свои линии можно чертить через панель инструментов графика.",
+    },
+    "sb_translate": {
+        "he": "🌐 תרגם טקסטים מ-Yahoo לשפת הממשק",
+        "en": "🌐 Translate Yahoo texts to UI language",
+        "ru": "🌐 Переводить тексты Yahoo на язык интерфейса",
+    },
+    "sb_translate_help": {
+        "he": "מתרגם סקטור, תעשייה ותיאור החברה. שירות חינמי — לעיתים איטי או לא זמין.",
+        "en": "Translates sector, industry and company description. Free service — sometimes slow.",
+        "ru": "Переводит сектор, отрасль и описание компании. Бесплатный сервис — бывает медленным.",
+    },
+    "sb_compare": {
+        "he": "⚖️ השוואה מול (עד 4 סימולים, מופרדים בפסיק)",
+        "en": "⚖️ Compare with (up to 4 symbols, comma-separated)",
+        "ru": "⚖️ Сравнить с (до 4 тикеров через запятую)",
+    },
+    "sb_quick_head": {
+        "he": "⚡ מעקב ובחירה מהירה", "en": "⚡ Watchlist & quick pick",
+        "ru": "⚡ Список наблюдения и быстрый выбор",
+    },
+    "sb_quick_pick": {
+        "he": "בחר סימול לניתוח מיידי", "en": "Pick a symbol to analyze now",
+        "ru": "Выберите тикер для анализа",
+    },
+    "sb_watchlist": {"he": "⭐ רשימת מעקב", "en": "⭐ Watchlist", "ru": "⭐ Список наблюдения"},
+    "sb_watchlist_help": {
+        "he": "הרשימה פרטית לך ונשמרת כל עוד הכרטיסייה פתוחה.",
+        "en": "Private to you, kept while this tab stays open.",
+        "ru": "Личный список, хранится пока открыта вкладка.",
+    },
+    "sb_dark_hint": {
+        "he": "למצב לילה מלא של המערכת: תפריט ☰ בפינה → Settings → Theme → Dark.",
+        "en": "Full system dark mode: ☰ menu → Settings → Theme → Dark.",
+        "ru": "Полная тёмная тема: меню ☰ → Settings → Theme → Dark.",
+    },
+    # --- טופס ---
+    "f_symbol": {
+        "he": "סימול / שם חברה / קריפטו", "en": "Symbol / company name / crypto",
+        "ru": "Тикер / название компании / крипто",
+    },
+    "f_symbol_ph": {
+        "he": "מניה: AAPL, NVIDIA · בורסות עולם: TEVA.TA, SAP.DE · קריפטו: BTC, ETH-USD",
+        "en": "Stock: AAPL, NVIDIA · World: TEVA.TA, SAP.DE · Crypto: BTC, ETH-USD",
+        "ru": "Акция: AAPL, NVIDIA · Мир: TEVA.TA, SAP.DE · Крипто: BTC, ETH-USD",
+    },
+    "f_period": {"he": "טווח נתונים", "en": "Data range", "ru": "Период данных"},
+    "f_analyze": {"he": "🔍 נתח מניה", "en": "🔍 Analyze", "ru": "🔍 Анализировать"},
+    "b_reset": {
+        "he": "↺ ניתוח מניה חדשה (איפוס)", "en": "↺ New analysis (reset)",
+        "ru": "↺ Новый анализ (сброс)",
+    },
+    "b_wl_add": {"he": "☆ הוסף לרשימת המעקב", "en": "☆ Add to watchlist", "ru": "☆ В список наблюдения"},
+    "b_wl_remove": {"he": "★ במעקב — הסר", "en": "★ In watchlist — remove", "ru": "★ В списке — убрать"},
+    # --- הודעות ---
+    "msg_enter": {
+        "he": "הזן סימול מניה, שם חברה, או מטבע קריפטו (למשל BTC, ETH-USD) למעלה ולחץ על נתח מניה.",
+        "en": "Enter a symbol, company name or crypto (e.g. BTC, ETH-USD) above and click Analyze.",
+        "ru": "Введите тикер, название компании или крипто (напр. BTC, ETH-USD) и нажмите «Анализировать».",
+    },
+    "msg_need_symbol": {"he": "יש להזין סימול מניה.", "en": "Please enter a symbol.",
+                        "ru": "Введите тикер."},
+    "msg_load_fail": {
+        "he": "לא הצלחתי לשלוף נתונים עבור '{sym}'.\n\nבדוק שהזנת סימול תקין "
+              "(למשל NVDA ולא NVIDIA), או נסה שם חברה מלא. ייתכן גם ש-Yahoo חוסם זמנית — "
+              "המתן דקה ונסה שוב.",
+        "en": "Couldn't fetch data for '{sym}'.\n\nCheck the symbol (e.g. NVDA not NVIDIA), "
+              "or try the full company name. Yahoo may be rate-limiting — wait a minute and retry.",
+        "ru": "Не удалось получить данные для «{sym}».\n\nПроверьте тикер (напр. NVDA, не NVIDIA) "
+              "или введите полное название. Возможен временный лимит Yahoo — подождите минуту.",
+    },
+    "msg_err_detail": {"he": "פרטי שגיאה: {err}", "en": "Error detail: {err}",
+                       "ru": "Детали ошибки: {err}"},
+    "msg_resolved": {
+        "he": "לא נמצא הסימול שהוזן — מוצג במקומו {sym} ({name}).",
+        "en": "Entered symbol not found — showing {sym} ({name}) instead.",
+        "ru": "Тикер не найден — показан {sym} ({name}).",
+    },
+    "msg_stooq": {
+        "he": "נתוני Yahoo לא היו זמינים — נתוני המחיר נשלפו מ-{src}. חלק מהנתונים הפיננסיים עשויים לחסור.",
+        "en": "Yahoo data unavailable — prices fetched from {src}. Some fundamentals may be missing.",
+        "ru": "Данные Yahoo недоступны — цены получены из {src}. Часть фундаментала может отсутствовать.",
+    },
+    "msg_short_range": {
+        "he": "טווח הנתונים קצר מ-200 ימי מסחר, לכן ממוצע נע 200 עשוי להיות חסר. מומלץ טווח של שנתיים ומעלה.",
+        "en": "Data range is under 200 trading days, so the 200-day MA may be missing. Prefer 2y or more.",
+        "ru": "Диапазон меньше 200 торговых дней — MA(200) может отсутствовать. Лучше 2 года и больше.",
+    },
+    # --- שורת מדדים ---
+    "m_last_price": {"he": "{sym} — מחיר אחרון", "en": "{sym} — last price", "ru": "{sym} — последняя цена"},
+    "m_day_change": {"he": "שינוי יומי", "en": "Daily change", "ru": "Изменение за день"},
+    "m_period_change": {"he": "שינוי בטווח ({p})", "en": "Change over ({p})", "ru": "Изменение за ({p})"},
+    "m_pe": {"he": "מכפיל רווח (P/E)", "en": "P/E ratio", "ru": "P/E"},
+    "m_mcap": {"he": "שווי שוק", "en": "Market cap", "ru": "Капитализация"},
+    "m_eps": {"he": "רווח למניה (EPS)", "en": "EPS", "ru": "EPS"},
+    "m_target": {"he": "מחיר יעד ממוצע", "en": "Avg. price target", "ru": "Средний таргет"},
+    # --- כרטיסיות ---
+    "tab_overview": {"he": "🧭 סקירה כללית", "en": "🧭 Overview", "ru": "🧭 Обзор"},
+    "tab_reco": {"he": "🧠 כדאיות קנייה", "en": "🧠 Buy signal", "ru": "🧠 Стоит ли покупать"},
+    "tab_fund": {"he": "💰 נתונים פיננסיים", "en": "💰 Financials", "ru": "💰 Финансы"},
+    "tab_tech": {"he": "📊 ניתוח טכני", "en": "📊 Technicals", "ru": "📊 Теханализ"},
+    "tab_chart": {"he": "📈 גרפים", "en": "📈 Charts", "ru": "📈 Графики"},
+    "tab_cmp": {"he": "⚖️ השוואה", "en": "⚖️ Compare", "ru": "⚖️ Сравнение"},
+    "tab_raw": {"he": "🗂 נתונים גולמיים", "en": "🗂 Raw data", "ru": "🗂 Сырые данные"},
+    # --- פסקי דין ---
+    "v_bullish": {"he": "מגמה חיובית (Bullish)", "en": "Bullish trend", "ru": "Бычий тренд (Bullish)"},
+    "v_bearish": {"he": "מגמה שלילית (Bearish)", "en": "Bearish trend", "ru": "Медвежий тренд (Bearish)"},
+    "v_neutral": {"he": "ניטרלי (Neutral)", "en": "Neutral", "ru": "Нейтрально"},
+    "tech_summary_line": {
+        "he": "{icon}  סיכום טכני אוטומטי: **{v}**  (ניקוד: {s})",
+        "en": "{icon}  Automatic technical summary: **{v}**  (score: {s})",
+        "ru": "{icon}  Автоматический теханализ: **{v}**  (счёт: {s})",
+    },
+    "reco_yes": {"he": "כן — האיתותים תומכים בקנייה", "en": "Yes — signals support buying",
+                 "ru": "Да — сигналы за покупку"},
+    "reco_no": {"he": "לא כרגע — האיתותים הטכניים שליליים", "en": "Not now — technical signals are negative",
+                "ru": "Не сейчас — сигналы отрицательные"},
+    "reco_unclear": {"he": "לא חד-משמעי — עדיף להמתין לאיתות ברור",
+                     "en": "Unclear — better wait for a clear signal",
+                     "ru": "Неоднозначно — лучше дождаться чёткого сигнала"},
+    "reco_line": {
+        "he": "🧠  שווה לקנות? **{ans}**", "en": "🧠  Worth buying? **{ans}**",
+        "ru": "🧠  Стоит покупать? **{ans}**",
+    },
+    "reco_horizon": {
+        "he": "**טווח מומלץ לפי הניתוח:** {txt}", "en": "**Recommended horizon:** {txt}",
+        "ru": "**Рекомендуемый горизонт:** {txt}",
+    },
+    "reco_horizon_suffix": {"he": "טווח {names}", "en": "{names} term", "ru": "{names} срок"},
+    "hz_short": {"he": "קצר", "en": "short", "ru": "краткий"},
+    "hz_medium": {"he": "בינוני", "en": "medium", "ru": "средний"},
+    "hz_long": {"he": "ארוך", "en": "long", "ru": "долгий"},
+    # --- אזהרות ---
+    "disc_reco": {
+        "he": "⚠️ זהו סיכום טכני אוטומטי בלבד ואינו ייעוץ השקעות, המלצה אישית או הבטחה לתשואה. "
+              "אינדיקטורים מתארים עבר והווה ואינם חוזים עתיד. החלטות השקעה באחריותך.",
+        "en": "⚠️ Automated technical summary only — not investment advice, a personal recommendation "
+              "or a promise of returns. Indicators describe past and present, not the future. "
+              "Investment decisions are your own.",
+        "ru": "⚠️ Только автоматический теханализ — не инвестиционный совет и не гарантия доходности. "
+              "Индикаторы описывают прошлое и настоящее, а не будущее. Решения — на вашей ответственности.",
+    },
+    "disc_footer": {
+        "he": "⚠️ הכלי מיועד ללימוד ולמחקר בלבד ואינו מהווה ייעוץ השקעות. "
+              "נתוני Yahoo Finance עשויים להיות מושהים או לא מדויקים.",
+        "en": "⚠️ For learning and research only — not investment advice. "
+              "Yahoo Finance data may be delayed or inaccurate.",
+        "ru": "⚠️ Только для обучения и исследований — не инвестиционный совет. "
+              "Данные Yahoo Finance могут быть с задержкой или неточными.",
+    },
+    # --- גרפים ---
+    "chart_caption": {
+        "he": "גרף אינטראקטיבי — הצבע לערכים, גרור לזום, השתמש בסרגל הכלים כדי לצייר קווים משלך. "
+              "מוצגים עד {n} ימי מסחר. סוג הגרף (קו/נרות) וקווים אוטומטיים — בסרגל הצד.",
+        "en": "Interactive chart — hover for values, drag to zoom, use the toolbar to draw your own lines. "
+              "Up to {n} trading days shown. Chart type and auto lines are in the sidebar.",
+        "ru": "Интерактивный график — наведите для значений, тяните для зума, рисуйте свои линии панелью. "
+              "Показано до {n} торговых дней. Тип графика и авто-линии — в боковой панели.",
+    },
+    "sr_support": {"he": "קו תמיכה", "en": "Support line", "ru": "Линия поддержки"},
+    "sr_resistance": {"he": "קו התנגדות", "en": "Resistance line", "ru": "Линия сопротивления"},
+    # --- בקטסט ---
+    "bt_title": {"he": "📉 בדיקה היסטורית של האיתות (בקטסט)", "en": "📉 Signal backtest",
+                 "ru": "📉 Историческая проверка сигнала (бэктест)"},
+    "bt_strat": {"he": "תשואת האסטרטגיה", "en": "Strategy return", "ru": "Доходность стратегии"},
+    "bt_bh": {"he": "קנייה והחזקה", "en": "Buy & hold", "ru": "Купить и держать"},
+    "bt_hit": {"he": "אחוז הצלחה ({d} ימים קדימה)", "en": "Hit rate ({d}d forward)",
+               "ru": "Доля успеха ({d} дн. вперёд)"},
+    "bt_exposure": {"he": "חשיפה לשוק", "en": "Market exposure", "ru": "Экспозиция на рынок"},
+    "bt_none": {
+        "he": "אין מספיק היסטוריה לבקטסט — בחר טווח נתונים ארוך יותר (2y ומעלה).",
+        "en": "Not enough history for a backtest — pick a longer range (2y+).",
+        "ru": "Недостаточно истории для бэктеста — выберите период подлиннее (2 года+).",
+    },
+    "bt_caption": {
+        "he": "האסטרטגיה: לונג כשניקוד המגמה +2 ומעלה, מחוץ לשוק כשהוא -2 ומטה. "
+              "ללא עמלות/מיסים, ללא שורט, גרסה מפושטת של הניקוד. ביצועי עבר אינם מבטיחים דבר.",
+        "en": "Strategy: long when the trend score is +2 or more, flat when -2 or less. "
+              "No fees/taxes, no shorting, simplified score. Past performance guarantees nothing.",
+        "ru": "Стратегия: лонг при счёте тренда +2 и выше, вне рынка при -2 и ниже. "
+              "Без комиссий/налогов, без шортов, упрощённый счёт. Прошлые результаты ничего не гарантируют.",
+    },
+    # --- סטטוס טווח ---
+    "st_pos": {"he": "חיובי", "en": "Positive", "ru": "Положительно"},
+    "st_neg": {"he": "שלילי", "en": "Negative", "ru": "Отрицательно"},
+    "st_neu": {"he": "ניטרלי", "en": "Neutral", "ru": "Нейтрально"},
+    "hz_head": {"he": "טווח {name}", "en": "{name} term", "ru": "{name} срок"},
+    "reco_score": {"he": "**{st} {arrow}**  ·  ניקוד {s}", "en": "**{st} {arrow}**  ·  score {s}",
+                   "ru": "**{st} {arrow}**  ·  счёт {s}"},
+    "reco_caption": {
+        "he": "הפסק נקבע מתוך שקלול האיתותים בכל טווח: טווח בניקוד +2 ומעלה נחשב 'חיובי'. "
+              "אם לפחות טווח אחד חיובי — התשובה 'כן', עם ציון הטווחים.",
+        "en": "The verdict weighs each horizon's signals: a horizon scoring +2 or more is 'positive'. "
+              "If at least one horizon is positive the answer is 'yes', naming the horizons.",
+        "ru": "Вердикт взвешивает сигналы по каждому горизонту: счёт +2 и выше — «положительно». "
+              "Если хотя бы один горизонт положителен — ответ «да» с указанием горизонтов.",
+    },
+    "reco_crypto_caption": {
+        "he": "עבור קריפטו הניקוד מבוסס על אינדיקטורים טכניים בלבד (אין P/E). "
+              "קריפטו תנודתי מאוד — יש להתייחס לתוצאה בזהירות רבה.",
+        "en": "For crypto the score is technical-only (no P/E). Crypto is very volatile — "
+              "treat the result with extra caution.",
+        "ru": "Для крипто счёт только технический (без P/E). Крипто очень волатильно — "
+              "относитесь к результату с особой осторожностью.",
+    },
+    "reco_no_data": {"he": "- אין מספיק נתונים", "en": "- not enough data", "ru": "- недостаточно данных"},
+    # --- סקירה ---
+    "ov_earnings": {"he": "📅 דוח קרוב: **{d}**", "en": "📅 Next earnings: **{d}**",
+                    "ru": "📅 Ближайший отчёт: **{d}**"},
+    "ov_exdiv": {"he": "💰 אקס-דיבידנד: {d}", "en": "💰 Ex-dividend: {d}", "ru": "💰 Экс-дивиденд: {d}"},
+    "ov_news": {"he": "📰 חדשות אחרונות ({n})", "en": "📰 Recent news ({n})",
+                "ru": "📰 Последние новости ({n})"},
+    "ov_company": {"he": "תיאור החברה", "en": "Company description", "ru": "Описание компании"},
+    "ov_translate_hint": {
+        "he": "להצגה בשפת הממשק: הדלק 'תרגם טקסטים' בסרגל הצד.",
+        "en": "To show in the UI language: enable 'Translate texts' in the sidebar.",
+        "ru": "Показать на языке интерфейса: включите «Переводить тексты» в боковой панели.",
+    },
+    # --- השוואה ---
+    "cmp_title": {"he": "⚖️ השוואה", "en": "⚖️ Compare", "ru": "⚖️ Сравнение"},
+    "cmp_caption": {
+        "he": "גרף מחיר מנורמל ל-100 בתחילת התקופה + טבלת מדדים. עד 4 מניות.",
+        "en": "Price chart rebased to 100 at the start + a metrics table. Up to 4 stocks.",
+        "ru": "График цены, приведённый к 100 в начале + таблица метрик. До 4 акций.",
+    },
+    "cmp_miss": {"he": "לא נמצאו נתונים עבור: {syms}", "en": "No data for: {syms}",
+                 "ru": "Нет данных для: {syms}"},
+    "cmp_table": {"he": "#### טבלת השוואה", "en": "#### Comparison table", "ru": "#### Таблица сравнения"},
+    "cmp_source": {
+        "he": "מקור: Yahoo Finance. תאי '—' = הנתון לא זמין (נפוץ במניות לא-אמריקאיות).",
+        "en": "Source: Yahoo Finance. '—' = value unavailable (common for non-US stocks).",
+        "ru": "Источник: Yahoo Finance. «—» = значение недоступно (часто для не-США акций).",
+    },
+    "cmp_norm": {"he": "מנורמל ל-100", "en": "Rebased to 100", "ru": "Приведено к 100"},
+    "cr_symbol": {"he": "סימול", "en": "Symbol", "ru": "Тикер"},
+    "cr_price": {"he": "מחיר", "en": "Price", "ru": "Цена"},
+    "cr_change": {"he": "שינוי בטווח", "en": "Change (period)", "ru": "Изменение за период"},
+    "cr_mcap": {"he": "שווי שוק", "en": "Market cap", "ru": "Капитализация"},
+    "cr_margin": {"he": "שולי רווח", "en": "Profit margin", "ru": "Маржа прибыли"},
+    "cr_rev_growth": {"he": "צמיחת הכנסות", "en": "Revenue growth", "ru": "Рост выручки"},
+    "cr_div_yield": {"he": "תשואת דיבידנד", "en": "Dividend yield", "ru": "Див. доходность"},
+    "cr_beta": {"he": "בטא", "en": "Beta", "ru": "Бета"},
+    "bt_eq_strat": {"he": "אסטרטגיה", "en": "Strategy", "ru": "Стратегия"},
+    "bt_eq_bh": {"he": "קנייה והחזקה", "en": "Buy & hold", "ru": "Купить и держать"},
+    # --- כללי ---
+    "raw_download": {"he": "⬇ הורדת כל הנתונים כקובץ CSV", "en": "⬇ Download all data as CSV",
+                     "ru": "⬇ Скачать все данные в CSV"},
+    "tech_caption": {
+        "he": "הניקוד מסכם את האיתותים בטבלה למטה: כל איתות חיובי מוסיף נקודה, כל שלילי מוריד. "
+              "+2 ומעלה = Bullish, -2 ומטה = Bearish, ביניהם = Neutral.",
+        "en": "The score sums the signals below: each positive adds a point, each negative subtracts. "
+              "+2 or more = Bullish, -2 or less = Bearish, in between = Neutral.",
+        "ru": "Счёт суммирует сигналы ниже: плюс добавляет очко, минус отнимает. "
+              "+2 и выше = Bullish, -2 и ниже = Bearish, между — Neutral.",
+    },
+    "tech_values_head": {"he": "#### ערכי האינדיקטורים האחרונים", "en": "#### Latest indicator values",
+                         "ru": "#### Последние значения индикаторов"},
+    "tech_signals_head": {"he": "#### פירוט האיתותים", "en": "#### Signal breakdown",
+                          "ru": "#### Разбор сигналов"},
+    "i18n_partial": {
+        "he": "", "en": "ℹ️ Detailed labels in this table are being translated — some rows still show Hebrew.",
+        "ru": "ℹ️ Подробные подписи в этой таблице ещё переводятся — часть строк пока на иврите.",
+    },
+}
 
 
 # ----------------------------------------------------------------------------
@@ -256,17 +588,20 @@ def price_str(value, code: str = "", digits: int = 2) -> str:
 
 
 # ----------------------------------------------------------------------------
-# תרגום אופציונלי לעברית (שירות חינמי, ללא מפתח). נכשל בשקט -> מחזיר מקור.
+# תרגום אופציונלי של טקסטים מ-Yahoo (שירות חינמי, ללא מפתח). נכשל בשקט.
 # ----------------------------------------------------------------------------
+_GT_TARGET = {"he": "iw", "en": "en", "ru": "ru"}
+
+
 @st.cache_data(ttl=86400, show_spinner=False)
-def translate_he(text: str) -> str:
+def translate_text(text: str, target: str = "iw") -> str:
     text = (text or "").strip()
     if not text:
         return ""
     try:
         from deep_translator import GoogleTranslator
 
-        out = GoogleTranslator(source="auto", target="iw").translate(text[:4800])
+        out = GoogleTranslator(source="auto", target=target).translate(text[:4800])
         if not out:
             return text
         low = out.lower()
@@ -278,11 +613,15 @@ def translate_he(text: str) -> str:
         return text
 
 
+def translate_he(text: str) -> str:  # תאימות לאחור (בדיקות/קריאות ישנות)
+    return translate_text(text, "iw")
+
+
 def maybe_he(text, enabled: bool):
-    """מתרגם רק אם המתג דלוק ויש טקסט לא-ריק."""
-    if enabled and text:
-        return translate_he(str(text))
-    return text
+    """מתרגם לשפת הממשק רק אם המתג דלוק ויש טקסט."""
+    if not (enabled and text):
+        return text
+    return translate_text(str(text), _GT_TARGET.get(get_lang(), "en"))
 
 
 # ----------------------------------------------------------------------------
@@ -807,11 +1146,11 @@ def technical_summary(df: pd.DataFrame):
                      "פירוש": "תנודתיות יומית ממוצעת — שימושי לתמחור סטופ-לוס"})
 
     if score >= 2:
-        verdict, icon, kind = "מגמה חיובית (Bullish)", "🟢", "success"
+        verdict, icon, kind = "v_bullish", "🟢", "success"
     elif score <= -2:
-        verdict, icon, kind = "מגמה שלילית (Bearish)", "🔴", "error"
+        verdict, icon, kind = "v_bearish", "🔴", "error"
     else:
-        verdict, icon, kind = "ניטרלי (Neutral)", "🟡", "info"
+        verdict, icon, kind = "v_neutral", "🟡", "info"
 
     return verdict, icon, kind, score, pd.DataFrame(rows)
 
@@ -837,11 +1176,12 @@ def _slope(series: pd.Series, lookback: int):
 
 
 def _label(score: int):
+    """מחזיר (status יציב, חץ, נקודה). status: pos / neg / neu."""
     if score >= 2:
-        return "חיובי", "▲", "🟢"
+        return "pos", "▲", "🟢"
     if score <= -2:
-        return "שלילי", "▼", "🔴"
-    return "ניטרלי", "◆", "🟡"
+        return "neg", "▼", "🔴"
+    return "neu", "◆", "🟡"
 
 
 def _horizon_short(df: pd.DataFrame):
@@ -1031,48 +1371,44 @@ def _horizon_long(df: pd.DataFrame, info: dict, pe):
     return score, reasons
 
 
+# טווח id -> תיאור זמן (מפתח יציב; התיאור מתורגם בתצוגה, כרגע עברית)
 HORIZON_META = {
-    "קצר": "ימים עד שבועות ספורים",
-    "בינוני": "שבועות עד מספר חודשים",
-    "ארוך": "מספר חודשים עד שנים",
+    "short": {"he": "ימים עד שבועות ספורים", "en": "days to a few weeks",
+              "ru": "дни — несколько недель"},
+    "medium": {"he": "שבועות עד מספר חודשים", "en": "weeks to a few months",
+               "ru": "недели — несколько месяцев"},
+    "long": {"he": "מספר חודשים עד שנים", "en": "months to years",
+             "ru": "месяцы — годы"},
 }
 
 
 def buy_recommendation(df: pd.DataFrame, info: dict, pe):
-    """מחזיר dict עם פסק כללי + פירוט לכל טווח. סיכום אוטומטי, לא ייעוץ."""
+    """מחזיר dict עם פסק כללי + פירוט לכל טווח (מפתחות יציבים). לא ייעוץ."""
     horizons = {}
-    for name, (sc, reasons) in {
-        "קצר": _horizon_short(df),
-        "בינוני": _horizon_medium(df),
-        "ארוך": _horizon_long(df, info, pe),
+    for hid, (sc, reasons) in {
+        "short": _horizon_short(df),
+        "medium": _horizon_medium(df),
+        "long": _horizon_long(df, info, pe),
     }.items():
-        text, arrow, dot = _label(sc)
-        horizons[name] = {
-            "label": text, "arrow": arrow, "dot": dot,
+        status, arrow, dot = _label(sc)
+        horizons[hid] = {
+            "status": status, "arrow": arrow, "dot": dot,
             "score": sc, "reasons": reasons,
-            "range": HORIZON_META[name],
         }
 
-    positives = [n for n, h in horizons.items() if h["label"] == "חיובי"]
-    negatives = [n for n, h in horizons.items() if h["label"] == "שלילי"]
+    positives = [h for h, v in horizons.items() if v["status"] == "pos"]
+    negatives = [h for h, v in horizons.items() if v["status"] == "neg"]
 
     if positives:
-        answer = "כן — האיתותים תומכים בקנייה"
-        kind = "success"
-        horizon_txt = "טווח " + " + ".join(positives)
+        answer_key, kind = "reco_yes", "success"
     elif negatives and not positives:
-        answer = "לא כרגע — האיתותים הטכניים שליליים"
-        kind = "error"
-        horizon_txt = "—"
+        answer_key, kind = "reco_no", "error"
     else:
-        answer = "לא חד-משמעי — עדיף להמתין לאיתות ברור"
-        kind = "info"
-        horizon_txt = "—"
+        answer_key, kind = "reco_unclear", "info"
 
     return {
-        "answer": answer,
+        "answer_key": answer_key,
         "kind": kind,
-        "horizon_txt": horizon_txt,
         "positives": positives,
         "horizons": horizons,
     }
@@ -1133,25 +1469,85 @@ def backtest_signal(df: pd.DataFrame, fwd: int = 20):
         "fwd_days": fwd,
         "n_long_days": int(long_mask.sum()),
         "exposure": exposure,
-        "equity": pd.DataFrame({"אסטרטגיה": strat_equity, "קנייה והחזקה": bh_equity}),
+        "equity": pd.DataFrame({"strategy": strat_equity, "buyhold": bh_equity}),
     }
 
 
 # ----------------------------------------------------------------------------
-# בניית הגרף — Plotly (אינטראקטיבי, תומך עברית + מצב לילה)
+# זיהוי אוטומטי של רמות תמיכה/התנגדות וקווי מגמה
+# ----------------------------------------------------------------------------
+def swing_points(close: pd.Series, window: int = 8):
+    """אינדקסים (מספריים) של שיאים ושפלים מקומיים לאורך חלון מרכזי."""
+    v = np.asarray(close, dtype=float)
+    highs, lows = [], []
+    for i in range(window, len(v) - window):
+        seg = v[i - window: i + window + 1]
+        if v[i] == seg.max():
+            highs.append(i)
+        elif v[i] == seg.min():
+            lows.append(i)
+    return highs, lows
+
+
+def support_resistance(df: pd.DataFrame, window: int = 8, max_levels: int = 4,
+                       tol: float = 0.012, lookback: int = 260):
+    """רמות מחיר אופקיות שחזרו לפחות פעמיים (אשכולות של פיבוטים)."""
+    close = df["Close"].tail(lookback).reset_index(drop=True)
+    if len(close) < 3 * window:
+        return []
+    hi, lo = swing_points(close, window)
+    prices = sorted(close.iloc[hi + lo].tolist())
+    if not prices:
+        return []
+    clusters = [[prices[0]]]
+    for p in prices[1:]:
+        if p <= clusters[-1][-1] * (1 + tol):
+            clusters[-1].append(p)
+        else:
+            clusters.append([p])
+    levels = [(sum(c) / len(c), len(c)) for c in clusters if len(c) >= 2]
+    levels.sort(key=lambda x: -x[1])
+    return [round(lv, 4) for lv, _ in levels[:max_levels]]
+
+
+def trendlines(df: pd.DataFrame, window: int = 8, lookback: int = 170):
+    """קו מגמה עולה דרך השפלים וקו יורד דרך השיאים, על פני התקופה הנראית."""
+    seg = df["Close"].tail(lookback)
+    idx = seg.index
+    y = seg.reset_index(drop=True)
+    if len(y) < 3 * window:
+        return {}
+    hi, lo = swing_points(y, window)
+    out = {}
+    for key, pts in (("support", lo), ("resistance", hi)):
+        if len(pts) >= 2:
+            x = np.array(pts, dtype=float)
+            m, b = np.polyfit(x, y.iloc[pts].to_numpy(dtype=float), 1)
+            x0, x1 = 0, len(y) - 1
+            out[key] = {"x": [idx[x0], idx[x1]], "y": [m * x0 + b, m * x1 + b]}
+    return out
+
+
+# ----------------------------------------------------------------------------
+# בניית הגרף — Plotly (אינטראקטיבי, רב-לשוני, מצב לילה, ציור קווים)
 # ----------------------------------------------------------------------------
 _CHART_TXT = {
     "he": {"close": "מחיר סגירה", "sma": "ממוצע {n}", "bb": "רצועות בולינגר",
-           "vol": "מחזור", "title": "{sym} — מחיר ואינדיקטורים"},
+           "vol": "מחזור", "title": "{sym} — מחיר ואינדיקטורים",
+           "support": "קו תמיכה", "resistance": "קו התנגדות"},
     "en": {"close": "Close", "sma": "SMA {n}", "bb": "Bollinger (20,2)",
-           "vol": "Volume", "title": "{sym} — Price & Indicators"},
+           "vol": "Volume", "title": "{sym} — Price & Indicators",
+           "support": "Support", "resistance": "Resistance"},
+    "ru": {"close": "Цена закрытия", "sma": "SMA {n}", "bb": "Боллинджер (20,2)",
+           "vol": "Объём", "title": "{sym} — цена и индикаторы",
+           "support": "Поддержка", "resistance": "Сопротивление"},
 }
 
 
 def build_chart(df: pd.DataFrame, symbol: str, dark: bool = False, lang: str = "he",
-                chart_type: str = "line", compact: bool = False):
+                chart_type: str = "line", compact: bool = False, overlays: bool = False):
     d = df.tail(220 if compact else 400)
-    t = _CHART_TXT["en" if lang == "en" else "he"]
+    t = _CHART_TXT.get(lang, _CHART_TXT["en"])
 
     fig = make_subplots(
         rows=4, cols=1, shared_xaxes=True, vertical_spacing=0.05 if compact else 0.04,
@@ -1182,6 +1578,22 @@ def build_chart(df: pd.DataFrame, symbol: str, dark: bool = False, lang: str = "
                                  line=dict(color="#9467bd", width=0.6),
                                  fill="tonexty", fillcolor="rgba(148,103,189,0.13)",
                                  hoverinfo="skip"), row=1, col=1)
+
+    if overlays:
+        lo_p, hi_p = float(d["Close"].min()), float(d["Close"].max())
+        for lv in support_resistance(df):
+            if lo_p * 0.9 <= lv <= hi_p * 1.1:
+                fig.add_hline(y=lv, line=dict(color="#7f7f7f", dash="dot", width=1),
+                              annotation_text=f"{lv:,.2f}", annotation_position="top left",
+                              annotation_font_size=9, row=1, col=1)
+        tl = trendlines(df)
+        for key, seg, color in (("support", tl.get("support"), "#2ca02c"),
+                                ("resistance", tl.get("resistance"), "#d62728")):
+            if seg:
+                fig.add_trace(go.Scatter(
+                    x=seg["x"], y=seg["y"], mode="lines", name=t.get(key, key),
+                    line=dict(color=color, dash="dash", width=1.6), hoverinfo="skip",
+                ), row=1, col=1)
 
     fig.add_trace(go.Bar(x=d.index, y=d["Volume"], name=t["vol"],
                          marker_color="#8c8c8c", showlegend=False), row=2, col=1)
@@ -1232,24 +1644,24 @@ def _compare_row(name: str, info: dict, hist: pd.DataFrame, price: float) -> dic
     dyf = (dr / price) if (dr and price) else (
         (dy / 100 if dy and abs(dy) > 1 else dy) if dy is not None else None)
     return {
-        "סימול": name,
-        "מחיר": fmt(price),
-        "שינוי בטווח": f"{chg:+.1f}%" if chg is not None else "—",
-        "שווי שוק": human_number(g("marketCap")),
+        t("cr_symbol"): name,
+        t("cr_price"): fmt(price),
+        t("cr_change"): f"{chg:+.1f}%" if chg is not None else "—",
+        t("cr_mcap"): human_number(g("marketCap")),
         "P/E": fmt(pe) if pe else "—",
         "P/S": fmt(g("priceToSalesTrailing12Months")),
-        "שולי רווח": fmt(g("profitMargins"), pct=True) if g("profitMargins") is not None else "—",
+        t("cr_margin"): fmt(g("profitMargins"), pct=True) if g("profitMargins") is not None else "—",
         "ROE": fmt(g("returnOnEquity"), pct=True) if g("returnOnEquity") is not None else "—",
-        "צמיחת הכנסות": fmt(g("revenueGrowth"), pct=True) if g("revenueGrowth") is not None else "—",
-        "תשואת דיבידנד": fmt(dyf, pct=True) if dyf is not None else "—",
-        "בטא": fmt(g("beta")),
+        t("cr_rev_growth"): fmt(g("revenueGrowth"), pct=True) if g("revenueGrowth") is not None else "—",
+        t("cr_div_yield"): fmt(dyf, pct=True) if dyf is not None else "—",
+        t("cr_beta"): fmt(g("beta")),
     }
 
 
 def render_compare(base_symbol: str, base_df: pd.DataFrame, period: str,
                    others: list, dark: bool, compact: bool = False) -> None:
-    st.subheader("⚖️ השוואה")
-    st.caption("גרף מחיר מנורמל ל-100 בתחילת התקופה + טבלת מדדים. עד 4 מניות להשוואה.")
+    st.subheader(t("cmp_title"))
+    st.caption(t("cmp_caption"))
 
     series = {base_symbol: base_df["Close"]}
     rows = [_compare_row(base_symbol, {}, base_df, float(base_df["Close"].iloc[-1]))]
@@ -1275,7 +1687,7 @@ def render_compare(base_symbol: str, base_df: pd.DataFrame, period: str,
         rows.append(_compare_row(used, info_o or {}, h, float(h["Close"].iloc[-1])))
 
     if misses:
-        st.warning("לא נמצאו נתונים עבור: " + ", ".join(misses))
+        st.warning(t("cmp_miss", syms=", ".join(misses)))
 
     # גרף מנורמל
     norm = pd.DataFrame(series).dropna(how="all")
@@ -1288,17 +1700,17 @@ def render_compare(base_symbol: str, base_df: pd.DataFrame, period: str,
             template="plotly_dark" if dark else "plotly_white",
             height=300 if compact else 440,
             margin=dict(l=30, r=10, t=24, b=22) if compact else dict(l=40, r=20, t=30, b=30),
-            hovermode="x unified", yaxis_title="מנורמל ל-100",
+            hovermode="x unified", yaxis_title=t("cmp_norm"),
             legend=dict(orientation="h", y=1.05, font=dict(size=9 if compact else 12)),
             font=dict(size=10 if compact else 12),
             paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
         )
         st.plotly_chart(fig, use_container_width=True, config={"responsive": True})
 
-    st.markdown("#### טבלת השוואה")
+    st.markdown(t("cmp_table"))
     # טרנספוזיציה — מדדים בשורות, מניות בעמודות: נכנס יפה גם במסך טלפון
-    st.table(pd.DataFrame(rows).set_index("סימול").T)
-    st.caption("מקור: Yahoo Finance. תאי '—' = הנתון לא זמין למניה זו (נפוץ במניות לא-אמריקאיות).")
+    st.table(pd.DataFrame(rows).set_index(t("cr_symbol")).T)
+    st.caption(t("cmp_source"))
 
 
 # ----------------------------------------------------------------------------
@@ -1308,31 +1720,25 @@ def main() -> None:
     st.set_page_config(page_title="מנתח מניות", page_icon="📈", layout="wide")
 
     with st.sidebar:
-        st.markdown("### ⚙️ הגדרות תצוגה")
-        dark = st.toggle("🌙 מצב לילה", key="dark_mode")
+        st.radio(
+            t("sb_language"), list(LANGS), format_func=lambda k: LANGS[k],
+            horizontal=True, key="lang",
+        )
+        st.markdown(f"### {t('sb_display')}")
+        dark = st.toggle(t("sb_dark"), key="dark_mode")
         chart_style = st.radio(
-            "סוג גרף מחיר", ["קו", "נרות יפניים"], horizontal=True, key="chart_style"
+            t("sb_chart_type"), ["line", "candle"], horizontal=True, key="chart_style",
+            format_func=lambda k: t("sb_line") if k == "line" else t("sb_candle"),
         )
-        compact_chart = st.toggle(
-            "📱 גרף קומפקטי (לטלפון)", key="compact_chart",
-            help="גרפים נמוכים יותר, פחות היסטוריה — נוח לצפייה במסך של טלפון.",
-        )
-        eng_chart = st.toggle(
-            "תוויות גרף באנגלית", key="eng_chart",
-            help="כברירת מחדל תוויות הגרף בעברית. הדלקה מציגה Close / SMA / Volume וכו'.",
-        )
-        translate_on = st.toggle(
-            "🌐 תרגם טקסטים מאנגלית לעברית", key="translate_on",
-            help="מתרגם סקטור, תעשייה ותיאור החברה. שירות חינמי — לעיתים איטי או לא זמין.",
-        )
+        compact_chart = st.toggle(t("sb_compact"), key="compact_chart", help=t("sb_compact_help"))
+        overlays_on = st.toggle(t("sb_overlays"), key="overlays_on", help=t("sb_overlays_help"))
+        translate_on = st.toggle(t("sb_translate"), key="translate_on", help=t("sb_translate_help"))
         st.markdown("---")
-        compare_raw = st.text_input(
-            "⚖️ השוואה מול (עד 4 סימולים, מופרדים בפסיק)", key="compare_syms",
-            placeholder="MSFT, GOOGL, NVDA",
-        )
+        compare_raw = st.text_input(t("sb_compare"), key="compare_syms",
+                                    placeholder="MSFT, GOOGL, NVDA")
 
         st.markdown("---")
-        st.markdown("### ⚡ מעקב ובחירה מהירה")
+        st.markdown(f"### {t('sb_quick_head')}")
         _QUICK = ["AAPL", "MSFT", "NVDA", "GOOGL", "AMZN", "TSLA", "META", "BTC-USD"]
         wl = st.session_state.setdefault("watchlist", [])
         recent = st.session_state.get("recent", [])
@@ -1345,48 +1751,36 @@ def main() -> None:
                 st.session_state["symbol"] = v
                 st.session_state.setdefault("period", "2y")
 
-        st.selectbox("בחר סימול לניתוח מיידי", pick_opts, key="quickpick",
-                     on_change=_on_quickpick)
+        st.selectbox(t("sb_quick_pick"), pick_opts, key="quickpick", on_change=_on_quickpick)
 
         new_wl = st.multiselect(
-            "⭐ רשימת מעקב", options=list(dict.fromkeys(wl + recent + _QUICK)), default=wl,
-            help="הרשימה פרטית לך ונשמרת כל עוד הכרטיסייה פתוחה.",
+            t("sb_watchlist"), options=list(dict.fromkeys(wl + recent + _QUICK)), default=wl,
+            help=t("sb_watchlist_help"),
         )
         if set(new_wl) != set(wl):
             st.session_state["watchlist"] = clean_watchlist(new_wl)
             st.rerun()
 
-        st.caption(
-            "למצב לילה מלא של המערכת: תפריט ☰ בפינה הימנית העליונה → "
-            "Settings → Theme → Dark."
-        )
+        st.caption(t("sb_dark_hint"))
 
-    st.markdown(_page_css(dark), unsafe_allow_html=True)
-    chart_lang = "en" if eng_chart else "he"
-    chart_type = "candle" if chart_style == "נרות יפניים" else "line"
+    st.markdown(_page_css(dark, rtl=is_rtl()), unsafe_allow_html=True)
+    chart_lang = get_lang()
+    chart_type = chart_style
     compare_syms = [s.strip().upper() for s in (compare_raw or "").replace(";", ",").split(",")
                     if s.strip()][:4]
 
-    st.title("📈 מנתח מניות — ניתוח טכני ופיננסי")
-    st.caption(
-        "כל הנתונים מגיעים מ-Yahoo Finance דרך הספרייה החינמית yfinance. "
-        "אין צורך במפתח API ואין שום שירות בתשלום."
-    )
+    st.title(t("app_title"))
+    st.caption(t("app_caption"))
 
     with st.form("analyze_form"):
         c1, c2, c3 = st.columns([3, 1, 1])
         with c1:
-            symbol_input = st.text_input(
-                "סימול / שם חברה / קריפטו", value="AAPL",
-                placeholder="מניה: AAPL, NVIDIA · בורסות עולם: TEVA.TA, SAP.DE · קריפטו: BTC, ETH-USD",
-            )
+            symbol_input = st.text_input(t("f_symbol"), value="AAPL", placeholder=t("f_symbol_ph"))
         with c2:
-            period = st.selectbox(
-                "טווח נתונים", ["6mo", "1y", "2y", "5y", "10y", "max"], index=2
-            )
+            period = st.selectbox(t("f_period"), ["6mo", "1y", "2y", "5y", "10y", "max"], index=2)
         with c3:
             st.markdown("<div style='height:1.9em'></div>", unsafe_allow_html=True)
-            submitted = st.form_submit_button("🔍 נתח מניה", use_container_width=True)
+            submitted = st.form_submit_button(t("f_analyze"), use_container_width=True)
 
     if submitted:
         st.session_state["run"] = True
@@ -1395,59 +1789,46 @@ def main() -> None:
 
     if st.session_state.get("run"):
         rc1, rc2 = st.columns([1, 1])
-        if rc1.button("↺ ניתוח מניה חדשה (איפוס)", use_container_width=True):
+        if rc1.button(t("b_reset"), use_container_width=True):
             for _k in ("run", "symbol", "period"):
                 st.session_state.pop(_k, None)
             st.rerun()
         _cur = (st.session_state.get("symbol") or "").strip().upper()
         _in_wl = _cur in st.session_state.get("watchlist", [])
-        if _cur and rc2.button(
-            ("★ במעקב — הסר" if _in_wl else "☆ הוסף לרשימת המעקב"),
-            use_container_width=True, key="wl_toggle",
-        ):
+        if _cur and rc2.button(t("b_wl_remove") if _in_wl else t("b_wl_add"),
+                               use_container_width=True, key="wl_toggle"):
             _wl = st.session_state.setdefault("watchlist", [])
             _wl.remove(_cur) if _in_wl else _wl.append(_cur)
             st.session_state["watchlist"] = clean_watchlist(_wl)
             st.rerun()
 
     if not st.session_state.get("run"):
-        st.info(
-            "הזן סימול מניה, שם חברה, או מטבע קריפטו (למשל `BTC`, `ETH-USD`) "
-            "למעלה ולחץ על **נתח מניה**."
-        )
+        st.info(t("msg_enter"))
         st.stop()
 
     symbol = st.session_state["symbol"]
     period = st.session_state["period"]
 
     if not symbol:
-        st.warning("יש להזין סימול מניה.")
+        st.warning(t("msg_need_symbol"))
         st.stop()
 
-    with st.spinner(f"טוען נתונים עבור {symbol}…"):
+    with st.spinner(f"{t('f_analyze')} — {symbol}…"):
         hist, info, load_err, used_symbol, resolved_name, price_source = load_data(symbol, period)
 
     if hist is None or hist.empty:
-        st.error(
-            f"לא הצלחתי לשלוף נתונים עבור '{symbol}'.\n\n"
-            "בדוק שהזנת **סימול** תקין (למשל `NVDA` ולא `NVIDIA`, `META` ולא `Facebook`), "
-            "או נסה להקליד את שם החברה במלואו. ייתכן גם ש-Yahoo חוסם זמנית — "
-            "המתן דקה ולחץ שוב על 'נתח מניה'."
-        )
+        st.error(t("msg_load_fail", sym=symbol))
         if load_err:
-            st.caption(f"פרטי שגיאה: {load_err}")
+            st.caption(t("msg_err_detail", err=load_err))
         st.stop()
 
     symbol = used_symbol
     _rec = st.session_state.get("recent", [])
     st.session_state["recent"] = ([symbol] + [x for x in _rec if x != symbol])[:8]
     if resolved_name:
-        st.success(f"לא נמצא הסימול שהוזן — מוצג במקומו **{used_symbol}** ({resolved_name}).")
+        st.success(t("msg_resolved", sym=used_symbol, name=resolved_name))
     if price_source and price_source != "Yahoo Finance":
-        st.warning(
-            f"נתוני Yahoo לא היו זמינים — נתוני המחיר נשלפו מ**{price_source}**. "
-            "ייתכן שחלק מהנתונים הפיננסיים חסרים."
-        )
+        st.warning(t("msg_stooq", src=price_source))
 
     df = add_indicators(hist)
     latest = df.iloc[-1]
@@ -1472,24 +1853,25 @@ def main() -> None:
     # --- שורת מדדים עליונה (2 עמודות — קריא גם בטלפון) ---
     m1, m2 = st.columns(2)
     m3, m4 = st.columns(2)
-    m1.metric(f"{symbol} — מחיר אחרון", price_str(price, currency))
-    m2.metric("שינוי יומי", f"{day_change:+,.2f}", f"{day_change_pct:+.2f}%")
-    m3.metric(f"שינוי בטווח ({period})", f"{period_change_pct:+.2f}%")
+    m1.metric(t("m_last_price", sym=symbol), price_str(price, currency))
+    m2.metric(t("m_day_change"), f"{day_change:+,.2f}", f"{day_change_pct:+.2f}%")
+    m3.metric(t("m_period_change", p=period), f"{period_change_pct:+.2f}%")
     if crypto:
-        m4.metric("שווי שוק", human_number(info.get("marketCap")))
+        m4.metric(t("m_mcap"), human_number(info.get("marketCap")))
     else:
-        m4.metric("מכפיל רווח (P/E)", fmt(pe) if pe else "—")
+        m4.metric(t("m_pe"), fmt(pe) if pe else "—")
 
     if len(df) < 200:
-        st.info(
-            "טווח הנתונים קצר מ-200 ימי מסחר, לכן ממוצע נע 200 עשוי להיות חסר או חלקי. "
-            "מומלץ לבחור טווח של שנתיים ומעלה."
-        )
+        st.info(t("msg_short_range"))
 
-    tab_labels = ["🧭 סקירה כללית", "🧠 כדאיות קנייה", "💰 נתונים פיננסיים",
-                  "📊 ניתוח טכני", "📈 גרפים", "🗂 נתונים גולמיים"]
+    verdict_txt = t(verdict)
+    horizon_names = " + ".join(t("hz_" + h) for h in reco["positives"])
+    horizon_txt = t("reco_horizon_suffix", names=horizon_names) if reco["positives"] else "—"
+
+    tab_labels = [t("tab_overview"), t("tab_reco"), t("tab_fund"),
+                  t("tab_tech"), t("tab_chart"), t("tab_raw")]
     if compare_syms:
-        tab_labels.insert(5, "⚖️ השוואה")
+        tab_labels.insert(5, t("tab_cmp"))
         tab_overview, tab_reco, tab_fund, tab_tech, tab_chart, tab_cmp, tab_raw = st.tabs(tab_labels)
     else:
         tab_cmp = None
@@ -1502,24 +1884,24 @@ def main() -> None:
         if meta:
             st.write(meta)
 
-        getattr(st, kind)(f"{icon}  סיכום טכני אוטומטי: **{verdict}**  (ניקוד: {score:+d})")
+        getattr(st, kind)(t("tech_summary_line", icon=icon, v=verdict_txt, s=f"{score:+d}"))
         getattr(st, reco["kind"])(
-            f"🧠  שווה לקנות? **{reco['answer']}**"
-            + (f"  ·  {reco['horizon_txt']}" if reco["positives"] else "")
+            t("reco_line", ans=t(reco["answer_key"]))
+            + (f"  ·  {horizon_txt}" if reco["positives"] else "")
         )
 
         cal = get_calendar_info(symbol)
         cal_bits = []
         if cal.get("earnings_date"):
-            cal_bits.append(f"📅 דוח קרוב: **{cal['earnings_date']}**")
+            cal_bits.append(t("ov_earnings", d=cal["earnings_date"]))
         if cal.get("ex_div"):
-            cal_bits.append(f"💰 אקס-דיבידנד: {cal['ex_div']}")
+            cal_bits.append(t("ov_exdiv", d=cal["ex_div"]))
         if cal_bits:
             st.markdown("  ·  ".join(cal_bits))
 
         news = get_news(symbol)
         if news:
-            with st.expander(f"📰 חדשות אחרונות ({len(news)})"):
+            with st.expander(t("ov_news", n=len(news))):
                 for n in news:
                     ttl = maybe_he(n["title"], translate_on)
                     head = f"**[{ttl}]({n['link']})**" if n["link"] else f"**{ttl}**"
@@ -1528,56 +1910,53 @@ def main() -> None:
 
         summary = info.get("longBusinessSummary")
         if summary:
-            with st.expander("תיאור החברה"):
+            with st.expander(t("ov_company")):
                 st.write(maybe_he(summary, translate_on))
-                if not translate_on:
-                    st.caption("להצגה בעברית: הדלק 'תרגם טקסטים' בסרגל הצד.")
+                if not translate_on and get_lang() != "en":
+                    st.caption(t("ov_translate_hint"))
 
     # --- כדאיות קנייה לפי טווח ---
     with tab_reco:
-        getattr(st, reco["kind"])(f"🧠  שווה לקנות?  **{reco['answer']}**")
+        getattr(st, reco["kind"])(t("reco_line", ans=t(reco["answer_key"])))
         if reco["positives"]:
-            st.markdown(f"**טווח מומלץ לפי הניתוח:** {reco['horizon_txt']}")
-        st.caption(
-            "הפסק נקבע אוטומטית מתוך שקלול האיתותים בכל טווח: כל טווח שמקבל ניקוד ‎+2‎ "
-            "ומעלה נחשב 'חיובי'. אם לפחות טווח אחד חיובי — התשובה 'כן', עם ציון הטווחים."
-        )
+            st.markdown(t("reco_horizon", txt=horizon_txt))
+        st.caption(t("reco_caption"))
         if crypto:
-            st.caption(
-                "עבור קריפטו הניקוד מבוסס על אינדיקטורים טכניים בלבד (אין נתוני יסוד "
-                "כמו P/E). קריפטו תנודתי מאוד — יש להתייחס לתוצאה בזהירות רבה."
-            )
+            st.caption(t("reco_crypto_caption"))
 
         cols = st.columns(3)
-        for col, (name, h) in zip(cols, reco["horizons"].items()):
+        for col, (hid, h) in zip(cols, reco["horizons"].items()):
             with col:
-                st.markdown(f"### {h['dot']} טווח {name}")
-                st.caption(h["range"])
-                st.markdown(f"**{h['label']} {h['arrow']}**  ·  ניקוד {h['score']:+d}")
+                st.markdown(f"### {h['dot']} " + t("hz_head", name=t("hz_" + hid)))
+                st.caption(HORIZON_META[hid].get(get_lang(), HORIZON_META[hid]["he"]))
+                st.markdown(t("reco_score", st=t("st_" + h["status"]), arrow=h["arrow"],
+                              s=f"{h['score']:+d}"))
                 for text, arrow in h["reasons"]:
                     st.markdown(f"- {arrow} {text}")
                 if not h["reasons"]:
-                    st.markdown("- אין מספיק נתונים")
+                    st.markdown(t("reco_no_data"))
 
         # --- בדיקה היסטורית (בקטסט) של האיתות ---
-        with st.expander("📉 בדיקה היסטורית של האיתות (בקטסט)"):
+        with st.expander(t("bt_title")):
             bt = backtest_signal(df)
             if bt is None:
-                st.caption("אין מספיק היסטוריה לבקטסט — בחר טווח נתונים ארוך יותר (2y ומעלה).")
+                st.caption(t("bt_none"))
             else:
                 b1, b2 = st.columns(2)
                 b3, b4 = st.columns(2)
-                b1.metric("תשואת האסטרטגיה", f"{bt['strategy_return'] * 100:+.1f}%")
-                b2.metric("קנייה והחזקה", f"{bt['buyhold_return'] * 100:+.1f}%")
+                b1.metric(t("bt_strat"), f"{bt['strategy_return'] * 100:+.1f}%")
+                b2.metric(t("bt_bh"), f"{bt['buyhold_return'] * 100:+.1f}%")
                 b3.metric(
-                    f"אחוז הצלחה ({bt['fwd_days']} ימים קדימה)",
+                    t("bt_hit", d=bt["fwd_days"]),
                     f"{bt['hit_rate'] * 100:.0f}%" if bt["hit_rate"] is not None else "—",
                 )
-                b4.metric("חשיפה לשוק", f"{bt['exposure'] * 100:.0f}%")
+                b4.metric(t("bt_exposure"), f"{bt['exposure'] * 100:.0f}%")
                 eq = bt["equity"]
                 bfig = go.Figure()
+                _eqname = {"strategy": t("bt_eq_strat"), "buyhold": t("bt_eq_bh")}
                 for col in eq.columns:
-                    bfig.add_trace(go.Scatter(x=eq.index, y=eq[col], name=col, mode="lines"))
+                    bfig.add_trace(go.Scatter(x=eq.index, y=eq[col],
+                                              name=_eqname.get(col, col), mode="lines"))
                 bfig.update_layout(
                     template="plotly_dark" if dark else "plotly_white",
                     height=210 if compact_chart else 300,
@@ -1589,16 +1968,9 @@ def main() -> None:
                     paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
                 )
                 st.plotly_chart(bfig, use_container_width=True, config={"responsive": True})
-                st.caption(
-                    "האסטרטגיה: לונג כשניקוד המגמה ‎+2‎ ומעלה, מחוץ לשוק כשהוא ‎−2‎ ומטה. "
-                    "לא כולל עמלות/מיסים, לא כולל שורט, ומבוסס על גרסה מפושטת של הניקוד. "
-                    "ביצועי עבר אינם מבטיחים דבר."
-                )
+                st.caption(t("bt_caption"))
 
-        st.warning(
-            "⚠️ זהו סיכום טכני אוטומטי בלבד ואינו ייעוץ השקעות, המלצה אישית או הבטחה לתשואה. "
-            "אינדיקטורים מתארים את העבר וההווה ואינם חוזים את העתיד. החלטות השקעה הן באחריותך."
-        )
+        st.warning(t("disc_reco"))
 
     # --- נתונים פיננסיים ---
     with tab_fund:
@@ -1677,13 +2049,12 @@ def main() -> None:
 
     # --- ניתוח טכני ---
     with tab_tech:
-        getattr(st, kind)(f"{icon}  סיכום טכני אוטומטי: **{verdict}**  (ניקוד: {score:+d})")
-        st.caption(
-            "הניקוד מסכם את האיתותים בטבלה למטה: כל איתות חיובי מוסיף נקודה, כל שלילי מוריד. "
-            "ניקוד ‎+2‎ ומעלה = Bullish, ‎−2‎ ומטה = Bearish, ביניהם = Neutral."
-        )
+        getattr(st, kind)(t("tech_summary_line", icon=icon, v=verdict_txt, s=f"{score:+d}"))
+        st.caption(t("tech_caption"))
+        if t("i18n_partial"):
+            st.caption(t("i18n_partial"))
 
-        st.markdown("#### ערכי האינדיקטורים האחרונים")
+        st.markdown(t("tech_values_head"))
         tech_vals = {
             "מחיר סגירה אחרון": fmt(latest["Close"]),
             "ממוצע נע 50": fmt(latest["SMA50"]),
@@ -1711,18 +2082,19 @@ def main() -> None:
         )
         st.dataframe(tech_df, hide_index=True, use_container_width=True)
 
-        st.markdown("#### פירוט האיתותים")
+        st.markdown(t("tech_signals_head"))
         st.dataframe(signals_df, hide_index=True, use_container_width=True)
 
     # --- גרפים ---
     with tab_chart:
         fig = build_chart(df, symbol, dark=dark, lang=chart_lang, chart_type=chart_type,
-                          compact=compact_chart)
-        st.plotly_chart(fig, use_container_width=True, config={"responsive": True})
-        st.caption(
-            "גרף אינטראקטיבי — אפשר להצביע לראות ערכים, לגרור לזום ולהקליק על מקרא. "
-            "מוצגים עד 400 ימי המסחר האחרונים. סוג הגרף (קו / נרות) נשלט בסרגל הצד."
-        )
+                          compact=compact_chart, overlays=overlays_on)
+        st.plotly_chart(fig, use_container_width=True, config={
+            "responsive": True, "displaylogo": False,
+            "modeBarButtonsToAdd": ["drawline", "drawopenpath", "drawrect",
+                                    "drawcircle", "eraseshape"],
+        })
+        st.caption(t("chart_caption", n=220 if compact_chart else 400))
 
     # --- השוואה מול מניות אחרות ---
     if tab_cmp is not None:
@@ -1733,18 +2105,11 @@ def main() -> None:
     with tab_raw:
         st.dataframe(df.tail(300), use_container_width=True)
         csv = df.to_csv().encode("utf-8-sig")
-        st.download_button(
-            "⬇ הורדת כל הנתונים כקובץ CSV",
-            data=csv,
-            file_name=f"{symbol}_analysis.csv",
-            mime="text/csv",
-        )
+        st.download_button(t("raw_download"), data=csv, file_name=f"{symbol}_analysis.csv",
+                           mime="text/csv")
 
     st.divider()
-    st.caption(
-        "⚠️ הכלי מיועד ללימוד ולמחקר בלבד ואינו מהווה ייעוץ השקעות, המלצה או הצעה לפעולה. "
-        "נתוני Yahoo Finance עשויים להיות מושהים או לא מדויקים."
-    )
+    st.caption(t("disc_footer"))
 
 
 if __name__ == "__main__":
