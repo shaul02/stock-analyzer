@@ -29,14 +29,17 @@ from ta.momentum import RSIIndicator
 from ta.trend import MACD, SMAIndicator
 from ta.volatility import BollingerBands
 
-# עיצוב בסיסי: יישור מימין לשמאל לעברית, מספרים וטבלאות נשארים LTR
+# עיצוב בסיסי: יישור מימין לשמאל לעברית.
+# חשוב: לא לגעת ב-.stApp / stAppViewContainer עצמם — RTL עליהם שובר את
+# אנימציית פתיחה/סגירה של סרגל הצד. מחילים RTL רק על תוכן הראשי ותוכן הסיידבר.
 _BASE_CSS = """
-      .stApp { direction: rtl; }
-      .stApp h1, .stApp h2, .stApp h3, .stApp h4,
-      .stApp p, .stApp label, .stApp .stMarkdown { text-align: right; }
+      [data-testid="stMain"], section.main, .main { direction: rtl; }
+      [data-testid="stMain"] h1, [data-testid="stMain"] h2, [data-testid="stMain"] h3,
+      [data-testid="stMain"] h4, [data-testid="stMain"] p, [data-testid="stMain"] label,
+      [data-testid="stMain"] .stMarkdown { text-align: right; }
       [data-testid="stMetric"] { direction: ltr; text-align: left; }
-      [data-testid="stTable"], .stDataFrame, [data-testid="stDataFrame"] { direction: ltr; }
-      [data-testid="stSidebar"] { direction: rtl; text-align: right; }
+      [data-testid="stTable"], [data-testid="stDataFrame"] { direction: ltr; }
+      [data-testid="stSidebarUserContent"] { direction: rtl; text-align: right; }
 """
 
 # שכבת מצב לילה — נדרסת רק כשהמשתמש מדליק אותה
@@ -63,6 +66,10 @@ _DARK_CSS = """
           background-color: #1c212b !important; color: #e6e6e6 !important;
           border-color: #2a2f3a !important; }
       [data-testid="stExpander"] { border-color: #2a2f3a !important; }
+      /* כפתור פתיחת סרגל הצד כשהוא מכווץ — שיישאר גלוי במצב לילה */
+      [data-testid="stSidebarCollapsedControl"], [data-testid="collapsedControl"],
+      [data-testid="stSidebarCollapseButton"], [data-testid="stSidebarCollapsedControl"] svg,
+      [data-testid="stSidebarCollapseButton"] svg { color: #e6e6e6 !important; fill: #e6e6e6 !important; }
 """
 
 
