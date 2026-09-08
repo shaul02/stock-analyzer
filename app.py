@@ -25,9 +25,10 @@ import plotly.graph_objects as go
 import streamlit as st
 import yfinance as yf
 from plotly.subplots import make_subplots
-from ta.momentum import RSIIndicator
-from ta.trend import MACD, SMAIndicator
-from ta.volatility import BollingerBands
+from ta.momentum import RSIIndicator, StochasticOscillator
+from ta.trend import ADXIndicator, MACD, SMAIndicator
+from ta.volatility import AverageTrueRange, BollingerBands
+from ta.volume import OnBalanceVolumeIndicator
 
 # עיצוב בסיסי: יישור מימין לשמאל לעברית.
 # חשוב: לא לגעת ב-.stApp / stAppViewContainer עצמם — RTL עליהם שובר את
@@ -243,7 +244,13 @@ def translate_he(text: str) -> str:
         from deep_translator import GoogleTranslator
 
         out = GoogleTranslator(source="auto", target="iw").translate(text[:4800])
-        return out or text
+        if not out:
+            return text
+        low = out.lower()
+        if any(b in low for b in ("that’s an error", "that's an error", "error 500",
+                                  "<html", "server error")):
+            return text  # השירות החינמי החזיר דף שגיאה — נשארים עם המקור
+        return out
     except Exception:
         return text
 
@@ -276,6 +283,30 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     out["BB_high"] = bb.bollinger_hband()
     out["BB_mid"] = bb.bollinger_mavg()
     out["BB_low"] = bb.bollinger_lband()
+
+    # אינדיקטורים נוספים — דורשים High/Low/Volume
+    if {"High", "Low"}.issubset(out.columns):
+        high, low = out["High"], out["Low"]
+        try:
+            out["ATR"] = AverageTrueRange(high, low, close, window=14, fillna=False).average_true_range()
+            out["ATR_pct"] = out["ATR"] / close * 100
+        except Exception:
+            pass
+        try:
+            out["ADX"] = ADXIndicator(high, low, close, window=14, fillna=False).adx()
+        except Exception:
+            pass
+        try:
+            stoch = StochasticOscillator(high, low, close, window=14, smooth_window=3, fillna=False)
+            out["STOCH_K"] = stoch.stoch()
+            out["STOCH_D"] = stoch.stoch_signal()
+        except Exception:
+            pass
+    if "Volume" in out.columns and out["Volume"].fillna(0).abs().sum() > 0:
+        try:
+            out["OBV"] = OnBalanceVolumeIndicator(close, out["Volume"], fillna=False).on_balance_volume()
+        except Exception:
+            pass
 
     return out
 
@@ -319,6 +350,21 @@ def financial_sections(info: dict, price=None) -> dict:
     def pct(key, digits=2):
         v = g(key)
         return fmt(v, pct=True, digits=digits) if v is not None else "—"
+
+    def _pct_frac(v):
+        """מנרמל ערך אחוז לשבר: 2.4 -> 0.024, 0.024 -> 0.024 (הגנה מפני שינויי פורמט ב-yfinance)."""
+        if v is None:
+            return None
+        return v / 100 if abs(v) > 1 else v
+
+    # תשואת דיבידנד: מחשבים מ-dividendRate/מחיר כשאפשר (יחידות מטבע אמינות),
+    # אחרת מנרמלים את dividendYield שהפורמט שלו השתנה בין גרסאות yfinance.
+    dr = g("dividendRate")
+    if dr and price:
+        div_yield_frac = dr / price
+    else:
+        div_yield_frac = _pct_frac(g("dividendYield"))
+    div_5y = _pct_frac(g("fiveYearAvgDividendYield"))
 
     fcf = g("freeCashflow")
     mcap = g("marketCap")
@@ -367,9 +413,8 @@ def financial_sections(info: dict, price=None) -> dict:
         },
         "דיבידנד": {
             "דיבידנד למניה (שנתי)": num("dividendRate"),
-            "תשואת דיבידנד": pct("dividendYield"),
-            "תשואה ממוצעת 5 שנים": pct("fiveYearAvgDividendYield")
-            if g("fiveYearAvgDividendYield") else "—",
+            "תשואת דיבידנד": fmt(div_yield_frac, pct=True) if div_yield_frac is not None else "—",
+            "תשואה ממוצעת 5 שנים": fmt(div_5y, pct=True) if div_5y is not None else "—",
             "יחס חלוקה (Payout)": pct("payoutRatio"),
         },
         "תחזית אנליסטים": {
@@ -639,6 +684,31 @@ def technical_summary(df: pd.DataFrame):
                          "פירוש": "המחיר בתוך הרצועות"})
     else:
         rows.append({"אינדיקטור": "רצועות בולינגר", "איתות": "—", "פירוש": "אין מספיק נתונים"})
+
+    stoch_k = latest.get("STOCH_K")
+    if is_num(stoch_k):
+        if stoch_k < 20:
+            score += 1
+            rows.append({"אינדיקטור": f"סטוכסטי %K = {stoch_k:.0f}", "איתות": "חיובי ▲",
+                         "פירוש": "מכירת יתר (מתחת ל-20)"})
+        elif stoch_k > 80:
+            score -= 1
+            rows.append({"אינדיקטור": f"סטוכסטי %K = {stoch_k:.0f}", "איתות": "שלילי ▼",
+                         "פירוש": "קניית יתר (מעל 80)"})
+        else:
+            rows.append({"אינדיקטור": f"סטוכסטי %K = {stoch_k:.0f}", "איתות": "ניטרלי ◆",
+                         "פירוש": "בטווח מאוזן (20–80)"})
+
+    adx = latest.get("ADX")
+    if is_num(adx):
+        strength = "מגמה חזקה" if adx >= 25 else ("מגמה חלשה/דשדוש" if adx < 20 else "מגמה מתגבשת")
+        rows.append({"אינדיקטור": f"ADX (14) = {adx:.0f}", "איתות": "מידע",
+                     "פירוש": f"{strength} — ADX מודד עוצמת מגמה, לא כיוון"})
+
+    atr_pct = latest.get("ATR_pct")
+    if is_num(atr_pct):
+        rows.append({"אינדיקטור": f"ATR = {atr_pct:.1f}% מהמחיר", "איתות": "מידע",
+                     "פירוש": "תנודתיות יומית ממוצעת — שימושי לתמחור סטופ-לוס"})
 
     if score >= 2:
         verdict, icon, kind = "מגמה חיובית (Bullish)", "🟢", "success"
@@ -913,6 +983,65 @@ def buy_recommendation(df: pd.DataFrame, info: dict, pe):
 
 
 # ----------------------------------------------------------------------------
+# בדיקה היסטורית (בקטסט) של איתות המגמה — עד כמה הוא "היה עובד" בעבר
+# ----------------------------------------------------------------------------
+def backtest_signal(df: pd.DataFrame, fwd: int = 20):
+    """גרסה וקטורית של ניקוד הטווח-הבינוני, מיושמת יום-אחר-יום (walk-forward).
+
+    לונג כשהניקוד ‎+2‎ ומעלה, מחוץ לשוק כשהניקוד ‎−2‎ ומטה, אחרת מחזיקים מצב קודם.
+    לא מנצל מידע עתידי (כל שורה משתמשת רק בנתונים שהיו זמינים באותו יום).
+    """
+    d = df.dropna(subset=["Close"]).copy()
+    if len(d) < 160:
+        return None
+
+    c = d["Close"]
+    sma50, sma100 = d["SMA50"], d["SMA100"]
+    macd = d.get("MACD")
+
+    s = (
+        (c > sma50).astype(int) - (c < sma50).astype(int)
+        + (c > sma100).astype(int) - (c < sma100).astype(int)
+        + (sma50 > sma50.shift(10)).astype(int) - (sma50 < sma50.shift(10)).astype(int)
+        + (sma50 > sma100).astype(int) - (sma50 < sma100).astype(int)
+    )
+    if macd is not None:
+        s = s + (macd > 0).astype(int) - (macd < 0).astype(int)
+    mom = c / c.shift(21) - 1
+    s = s + (mom > 0.03).astype(int) - (mom < -0.03).astype(int)
+
+    raw = pd.Series(pd.NA, index=d.index, dtype="Float64")
+    raw[s >= 2] = 1.0
+    raw[s <= -2] = 0.0
+    pos = raw.ffill().fillna(0.0).astype(float)
+
+    ret = c.pct_change().fillna(0.0)
+    strat_ret = pos.shift(1).fillna(0.0) * ret
+    valid = sma100.notna()
+    strat_ret, ret = strat_ret[valid], ret[valid]
+    if len(strat_ret) < 60:
+        return None
+
+    strat_equity = (1 + strat_ret).cumprod()
+    bh_equity = (1 + ret).cumprod()
+
+    fwd_ret = (c.shift(-fwd) / c - 1)[valid]
+    long_mask = (pos[valid] == 1) & fwd_ret.notna()
+    hit_rate = float((fwd_ret[long_mask] > 0).mean()) if long_mask.any() else None
+    exposure = float((pos[valid] == 1).mean())
+
+    return {
+        "strategy_return": float(strat_equity.iloc[-1] - 1),
+        "buyhold_return": float(bh_equity.iloc[-1] - 1),
+        "hit_rate": hit_rate,
+        "fwd_days": fwd,
+        "n_long_days": int(long_mask.sum()),
+        "exposure": exposure,
+        "equity": pd.DataFrame({"אסטרטגיה": strat_equity, "קנייה והחזקה": bh_equity}),
+    }
+
+
+# ----------------------------------------------------------------------------
 # בניית הגרף — Plotly (אינטראקטיבי, תומך עברית + מצב לילה)
 # ----------------------------------------------------------------------------
 _CHART_TXT = {
@@ -923,7 +1052,8 @@ _CHART_TXT = {
 }
 
 
-def build_chart(df: pd.DataFrame, symbol: str, dark: bool = False, lang: str = "he"):
+def build_chart(df: pd.DataFrame, symbol: str, dark: bool = False, lang: str = "he",
+                chart_type: str = "line"):
     d = df.tail(400)
     t = _CHART_TXT["en" if lang == "en" else "he"]
 
@@ -933,8 +1063,16 @@ def build_chart(df: pd.DataFrame, symbol: str, dark: bool = False, lang: str = "
         subplot_titles=(t["title"].format(sym=symbol), t["vol"], "RSI (14)", "MACD (12,26,9)"),
     )
 
-    fig.add_trace(go.Scatter(x=d.index, y=d["Close"], name=t["close"],
-                             line=dict(color="#1f77b4", width=1.7)), row=1, col=1)
+    if chart_type == "candle" and {"Open", "High", "Low"}.issubset(d.columns):
+        fig.add_trace(go.Candlestick(
+            x=d.index, open=d["Open"], high=d["High"], low=d["Low"], close=d["Close"],
+            name=t["close"], increasing_line_color="#2ca02c", decreasing_line_color="#d62728",
+            showlegend=False,
+        ), row=1, col=1)
+        fig.update_xaxes(rangeslider_visible=False)
+    else:
+        fig.add_trace(go.Scatter(x=d.index, y=d["Close"], name=t["close"],
+                                 line=dict(color="#1f77b4", width=1.7)), row=1, col=1)
     for n, col, color in ((50, "SMA50", "#ff7f0e"), (100, "SMA100", "#2ca02c"),
                           (200, "SMA200", "#d62728")):
         if d[col].notna().any():
@@ -982,6 +1120,86 @@ def build_chart(df: pd.DataFrame, symbol: str, dark: bool = False, lang: str = "
 
 
 # ----------------------------------------------------------------------------
+# השוואה בין מניות
+# ----------------------------------------------------------------------------
+def _compare_row(name: str, info: dict, hist: pd.DataFrame, price: float) -> dict:
+    g = info.get
+    chg = None
+    if hist is not None and not hist.empty and len(hist) > 1:
+        c0 = float(hist["Close"].iloc[0])
+        chg = (price / c0 - 1) * 100 if c0 else None
+    pe, _ = pe_ratio(info, g("currentPrice") or price)
+    dr, dy = g("dividendRate"), g("dividendYield")
+    dyf = (dr / price) if (dr and price) else (
+        (dy / 100 if dy and abs(dy) > 1 else dy) if dy is not None else None)
+    return {
+        "סימול": name,
+        "מחיר": fmt(price),
+        "שינוי בטווח": f"{chg:+.1f}%" if chg is not None else "—",
+        "שווי שוק": human_number(g("marketCap")),
+        "P/E": fmt(pe) if pe else "—",
+        "P/S": fmt(g("priceToSalesTrailing12Months")),
+        "שולי רווח": fmt(g("profitMargins"), pct=True) if g("profitMargins") is not None else "—",
+        "ROE": fmt(g("returnOnEquity"), pct=True) if g("returnOnEquity") is not None else "—",
+        "צמיחת הכנסות": fmt(g("revenueGrowth"), pct=True) if g("revenueGrowth") is not None else "—",
+        "תשואת דיבידנד": fmt(dyf, pct=True) if dyf is not None else "—",
+        "בטא": fmt(g("beta")),
+    }
+
+
+def render_compare(base_symbol: str, base_df: pd.DataFrame, period: str,
+                   others: list, dark: bool) -> None:
+    st.subheader("⚖️ השוואה")
+    st.caption("גרף מחיר מנורמל ל-100 בתחילת התקופה + טבלת מדדים. עד 4 מניות להשוואה.")
+
+    series = {base_symbol: base_df["Close"]}
+    rows = [_compare_row(base_symbol, {}, base_df, float(base_df["Close"].iloc[-1]))]
+    # שורת הבסיס — נשתמש ב-info אמיתי דרך load_data המטמון
+    try:
+        b_hist, b_info, *_ = load_data(base_symbol, period)
+        rows[0] = _compare_row(base_symbol, b_info or {}, b_hist, float(b_hist["Close"].iloc[-1]))
+    except Exception:
+        pass
+
+    misses = []
+    for sym in others:
+        if sym == base_symbol:
+            continue
+        try:
+            h, info_o, err, used, _resolved, _src = load_data(sym, period)
+        except Exception:
+            h, info_o, used = None, {}, sym
+        if h is None or h.empty:
+            misses.append(sym)
+            continue
+        series[used] = h["Close"]
+        rows.append(_compare_row(used, info_o or {}, h, float(h["Close"].iloc[-1])))
+
+    if misses:
+        st.warning("לא נמצאו נתונים עבור: " + ", ".join(misses))
+
+    # גרף מנורמל
+    norm = pd.DataFrame(series).dropna(how="all")
+    if not norm.empty:
+        norm = norm / norm.bfill().iloc[0] * 100
+        fig = go.Figure()
+        for col in norm.columns:
+            fig.add_trace(go.Scatter(x=norm.index, y=norm[col], name=str(col), mode="lines"))
+        fig.update_layout(
+            template="plotly_dark" if dark else "plotly_white",
+            height=440, margin=dict(l=40, r=20, t=30, b=30),
+            hovermode="x unified", yaxis_title="מנורמל ל-100",
+            legend=dict(orientation="h", y=1.05),
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+    st.markdown("#### טבלת השוואה")
+    st.table(pd.DataFrame(rows).set_index("סימול"))
+    st.caption("מקור: Yahoo Finance. תאי '—' = הנתון לא זמין למניה זו (נפוץ במניות לא-אמריקאיות).")
+
+
+# ----------------------------------------------------------------------------
 # ממשק המשתמש
 # ----------------------------------------------------------------------------
 def main() -> None:
@@ -990,6 +1208,9 @@ def main() -> None:
     with st.sidebar:
         st.markdown("### ⚙️ הגדרות תצוגה")
         dark = st.toggle("🌙 מצב לילה", key="dark_mode")
+        chart_style = st.radio(
+            "סוג גרף מחיר", ["קו", "נרות יפניים"], horizontal=True, key="chart_style"
+        )
         eng_chart = st.toggle(
             "תוויות גרף באנגלית", key="eng_chart",
             help="כברירת מחדל תוויות הגרף בעברית. הדלקה מציגה Close / SMA / Volume וכו'.",
@@ -998,6 +1219,11 @@ def main() -> None:
             "🌐 תרגם טקסטים מאנגלית לעברית", key="translate_on",
             help="מתרגם סקטור, תעשייה ותיאור החברה. שירות חינמי — לעיתים איטי או לא זמין.",
         )
+        st.markdown("---")
+        compare_raw = st.text_input(
+            "⚖️ השוואה מול (עד 4 סימולים, מופרדים בפסיק)", key="compare_syms",
+            placeholder="MSFT, GOOGL, NVDA",
+        )
         st.caption(
             "למצב לילה מלא של המערכת: תפריט ☰ בפינה הימנית העליונה → "
             "Settings → Theme → Dark."
@@ -1005,6 +1231,9 @@ def main() -> None:
 
     st.markdown(_page_css(dark), unsafe_allow_html=True)
     chart_lang = "en" if eng_chart else "he"
+    chart_type = "candle" if chart_style == "נרות יפניים" else "line"
+    compare_syms = [s.strip().upper() for s in (compare_raw or "").replace(";", ",").split(",")
+                    if s.strip()][:4]
 
     st.title("📈 מנתח מניות — ניתוח טכני ופיננסי")
     st.caption(
@@ -1111,10 +1340,14 @@ def main() -> None:
             "מומלץ לבחור טווח של שנתיים ומעלה."
         )
 
-    tab_overview, tab_reco, tab_fund, tab_tech, tab_chart, tab_raw = st.tabs(
-        ["🧭 סקירה כללית", "🧠 כדאיות קנייה", "💰 נתונים פיננסיים",
-         "📊 ניתוח טכני", "📈 גרפים", "🗂 נתונים גולמיים"]
-    )
+    tab_labels = ["🧭 סקירה כללית", "🧠 כדאיות קנייה", "💰 נתונים פיננסיים",
+                  "📊 ניתוח טכני", "📈 גרפים", "🗂 נתונים גולמיים"]
+    if compare_syms:
+        tab_labels.insert(5, "⚖️ השוואה")
+        tab_overview, tab_reco, tab_fund, tab_tech, tab_chart, tab_cmp, tab_raw = st.tabs(tab_labels)
+    else:
+        tab_cmp = None
+        tab_overview, tab_reco, tab_fund, tab_tech, tab_chart, tab_raw = st.tabs(tab_labels)
 
     # --- סקירה כללית ---
     with tab_overview:
@@ -1161,6 +1394,37 @@ def main() -> None:
                     st.markdown(f"- {arrow} {text}")
                 if not h["reasons"]:
                     st.markdown("- אין מספיק נתונים")
+
+        # --- בדיקה היסטורית (בקטסט) של האיתות ---
+        with st.expander("📉 בדיקה היסטורית של האיתות (בקטסט)"):
+            bt = backtest_signal(df)
+            if bt is None:
+                st.caption("אין מספיק היסטוריה לבקטסט — בחר טווח נתונים ארוך יותר (2y ומעלה).")
+            else:
+                b1, b2, b3, b4 = st.columns(4)
+                b1.metric("תשואת האסטרטגיה", f"{bt['strategy_return'] * 100:+.1f}%")
+                b2.metric("קנייה והחזקה", f"{bt['buyhold_return'] * 100:+.1f}%")
+                b3.metric(
+                    f"אחוז הצלחה ({bt['fwd_days']} ימים קדימה)",
+                    f"{bt['hit_rate'] * 100:.0f}%" if bt["hit_rate"] is not None else "—",
+                )
+                b4.metric("חשיפה לשוק", f"{bt['exposure'] * 100:.0f}%")
+                eq = bt["equity"]
+                bfig = go.Figure()
+                for col in eq.columns:
+                    bfig.add_trace(go.Scatter(x=eq.index, y=eq[col], name=col, mode="lines"))
+                bfig.update_layout(
+                    template="plotly_dark" if dark else "plotly_white",
+                    height=300, margin=dict(l=40, r=20, t=20, b=25),
+                    hovermode="x unified", legend=dict(orientation="h", y=1.1),
+                    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                )
+                st.plotly_chart(bfig, use_container_width=True)
+                st.caption(
+                    "האסטרטגיה: לונג כשניקוד המגמה ‎+2‎ ומעלה, מחוץ לשוק כשהוא ‎−2‎ ומטה. "
+                    "לא כולל עמלות/מיסים, לא כולל שורט, ומבוסס על גרסה מפושטת של הניקוד. "
+                    "ביצועי עבר אינם מבטיחים דבר."
+                )
 
         st.warning(
             "⚠️ זהו סיכום טכני אוטומטי בלבד ואינו ייעוץ השקעות, המלצה אישית או הבטחה לתשואה. "
@@ -1263,6 +1527,15 @@ def main() -> None:
             "בולינגר — אמצע": fmt(latest["BB_mid"]),
             "בולינגר — תחתון": fmt(latest["BB_low"]),
         }
+        for label, key, dg in (
+            ("סטוכסטי %K", "STOCH_K", 1), ("סטוכסטי %D", "STOCH_D", 1),
+            ("ADX (14) — עוצמת מגמה", "ADX", 1),
+            ("ATR (14)", "ATR", 2), ("ATR כאחוז מהמחיר", "ATR_pct", 2),
+            ("OBV — מאזן נפח", "OBV", 0),
+        ):
+            if key in latest and is_num(latest.get(key)):
+                tech_vals[label] = (human_number(latest[key]) if key == "OBV"
+                                    else fmt(latest[key], digits=dg))
         tech_df = pd.DataFrame(
             {"אינדיקטור": list(tech_vals.keys()), "ערך": list(tech_vals.values())}
         )
@@ -1273,12 +1546,17 @@ def main() -> None:
 
     # --- גרפים ---
     with tab_chart:
-        fig = build_chart(df, symbol, dark=dark, lang=chart_lang)
+        fig = build_chart(df, symbol, dark=dark, lang=chart_lang, chart_type=chart_type)
         st.plotly_chart(fig, use_container_width=True)
         st.caption(
             "גרף אינטראקטיבי — אפשר להצביע לראות ערכים, לגרור לזום ולהקליק על מקרא. "
-            "מוצגים עד 400 ימי המסחר האחרונים."
+            "מוצגים עד 400 ימי המסחר האחרונים. סוג הגרף (קו / נרות) נשלט בסרגל הצד."
         )
+
+    # --- השוואה מול מניות אחרות ---
+    if tab_cmp is not None:
+        with tab_cmp:
+            render_compare(symbol, df, period, compare_syms, dark)
 
     # --- נתונים גולמיים ---
     with tab_raw:
