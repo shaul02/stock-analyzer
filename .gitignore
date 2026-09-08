@@ -22,3 +22,5 @@ Thumbs.db
 # פרויקטים אחרים בתיקייה שלא שייכים לאפליקציית המניות
 index.html
 stock-ta/
+
+watchlist.json

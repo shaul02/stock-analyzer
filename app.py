@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import time
 import urllib.parse
 import urllib.request
@@ -600,6 +601,94 @@ def get_sec_facts(symbol: str):
         index=[lbl for lbl, _, _ in _SEC_CONCEPTS],
     )
     return table, f"מקור: SEC EDGAR · CIK {cik} · דוחות 10-K/20-F רשמיים."
+
+
+# ----------------------------------------------------------------------------
+# חדשות + לוח אירועים (yfinance, חינמי)
+# ----------------------------------------------------------------------------
+@st.cache_data(ttl=1800, show_spinner=False)
+def get_news(symbol: str, limit: int = 6) -> list:
+    try:
+        raw = yf.Ticker(symbol).news or []
+    except Exception:
+        return []
+    items = []
+    for it in raw:
+        c = it.get("content") if isinstance(it.get("content"), dict) else it
+        title = c.get("title") or it.get("title")
+        if not title:
+            continue
+        link = ""
+        for k in ("canonicalUrl", "clickThroughUrl"):
+            v = c.get(k)
+            if isinstance(v, dict) and v.get("url"):
+                link = v["url"]
+                break
+        link = link or it.get("link", "")
+        pub = ""
+        prov = c.get("provider")
+        if isinstance(prov, dict):
+            pub = prov.get("displayName", "")
+        pub = pub or it.get("publisher", "")
+        ts = c.get("pubDate") or c.get("displayTime") or it.get("providerPublishTime")
+        when = ""
+        try:
+            if isinstance(ts, (int, float)):
+                when = pd.to_datetime(ts, unit="s").strftime("%Y-%m-%d")
+            elif isinstance(ts, str):
+                when = ts[:10]
+        except Exception:
+            pass
+        items.append({"title": title, "link": link, "publisher": pub, "when": when})
+        if len(items) >= limit:
+            break
+    return items
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_calendar_info(symbol: str) -> dict:
+    try:
+        cal = yf.Ticker(symbol).calendar
+    except Exception:
+        return {}
+    out = {}
+    if isinstance(cal, dict):
+        ed = cal.get("Earnings Date")
+        if isinstance(ed, (list, tuple)) and ed:
+            out["earnings_date"] = str(ed[0])[:10]
+        elif ed:
+            out["earnings_date"] = str(ed)[:10]
+        if cal.get("Ex-Dividend Date"):
+            out["ex_div"] = str(cal["Ex-Dividend Date"])[:10]
+    elif cal is not None and getattr(cal, "empty", True) is False:
+        try:
+            out["earnings_date"] = str(cal.iloc[0, 0])[:10]
+        except Exception:
+            pass
+    return out
+
+
+# ----------------------------------------------------------------------------
+# רשימת מעקב — נשמרת מקומית לקובץ (best-effort; מתאפס בפריסה מחדש בענן)
+# ----------------------------------------------------------------------------
+_WATCH_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "watchlist.json")
+
+
+def load_watchlist() -> list:
+    try:
+        with open(_WATCH_FILE, encoding="utf-8") as fh:
+            data = json.load(fh)
+        return list(dict.fromkeys(str(x).upper() for x in data))[:40]
+    except Exception:
+        return []
+
+
+def save_watchlist(items: list) -> None:
+    try:
+        with open(_WATCH_FILE, "w", encoding="utf-8") as fh:
+            json.dump(list(dict.fromkeys(items)), fh)
+    except Exception:
+        pass
 
 
 # ----------------------------------------------------------------------------
@@ -1224,6 +1313,33 @@ def main() -> None:
             "⚖️ השוואה מול (עד 4 סימולים, מופרדים בפסיק)", key="compare_syms",
             placeholder="MSFT, GOOGL, NVDA",
         )
+
+        st.markdown("---")
+        st.markdown("### ⚡ מעקב ובחירה מהירה")
+        _QUICK = ["AAPL", "MSFT", "NVDA", "GOOGL", "AMZN", "TSLA", "META", "BTC-USD"]
+        wl = st.session_state.setdefault("watchlist", load_watchlist())
+        recent = st.session_state.get("recent", [])
+        pick_opts = ["—"] + list(dict.fromkeys(wl + recent + _QUICK))
+
+        def _on_quickpick():
+            v = st.session_state.get("quickpick")
+            if v and v != "—":
+                st.session_state["run"] = True
+                st.session_state["symbol"] = v
+                st.session_state.setdefault("period", "2y")
+
+        st.selectbox("בחר סימול לניתוח מיידי", pick_opts, key="quickpick",
+                     on_change=_on_quickpick)
+
+        new_wl = st.multiselect(
+            "⭐ רשימת מעקב", options=list(dict.fromkeys(wl + recent + _QUICK)), default=wl,
+            help="בחר סימולים למעקב — נשמרים בין הפעלות (מקומית).",
+        )
+        if set(new_wl) != set(wl):
+            st.session_state["watchlist"] = new_wl
+            save_watchlist(new_wl)
+            st.rerun()
+
         st.caption(
             "למצב לילה מלא של המערכת: תפריט ☰ בפינה הימנית העליונה → "
             "Settings → Theme → Dark."
@@ -1262,9 +1378,20 @@ def main() -> None:
         st.session_state["period"] = period
 
     if st.session_state.get("run"):
-        if st.button("↺ ניתוח מניה חדשה (איפוס)"):
+        rc1, rc2 = st.columns([1, 1])
+        if rc1.button("↺ ניתוח מניה חדשה (איפוס)", use_container_width=True):
             for _k in ("run", "symbol", "period"):
                 st.session_state.pop(_k, None)
+            st.rerun()
+        _cur = (st.session_state.get("symbol") or "").strip().upper()
+        _in_wl = _cur in st.session_state.get("watchlist", [])
+        if _cur and rc2.button(
+            ("★ במעקב — הסר" if _in_wl else "☆ הוסף לרשימת המעקב"),
+            use_container_width=True, key="wl_toggle",
+        ):
+            _wl = st.session_state.setdefault("watchlist", [])
+            _wl.remove(_cur) if _in_wl else _wl.append(_cur)
+            save_watchlist(_wl)
             st.rerun()
 
     if not st.session_state.get("run"):
@@ -1296,6 +1423,8 @@ def main() -> None:
         st.stop()
 
     symbol = used_symbol
+    _rec = st.session_state.get("recent", [])
+    st.session_state["recent"] = ([symbol] + [x for x in _rec if x != symbol])[:8]
     if resolved_name:
         st.success(f"לא נמצא הסימול שהוזן — מוצג במקומו **{used_symbol}** ({resolved_name}).")
     if price_source and price_source != "Yahoo Finance":
@@ -1361,6 +1490,24 @@ def main() -> None:
             f"🧠  שווה לקנות? **{reco['answer']}**"
             + (f"  ·  {reco['horizon_txt']}" if reco["positives"] else "")
         )
+
+        cal = get_calendar_info(symbol)
+        cal_bits = []
+        if cal.get("earnings_date"):
+            cal_bits.append(f"📅 דוח קרוב: **{cal['earnings_date']}**")
+        if cal.get("ex_div"):
+            cal_bits.append(f"💰 אקס-דיבידנד: {cal['ex_div']}")
+        if cal_bits:
+            st.markdown("  ·  ".join(cal_bits))
+
+        news = get_news(symbol)
+        if news:
+            with st.expander(f"📰 חדשות אחרונות ({len(news)})"):
+                for n in news:
+                    ttl = maybe_he(n["title"], translate_on)
+                    head = f"**[{ttl}]({n['link']})**" if n["link"] else f"**{ttl}**"
+                    meta = " · ".join(x for x in [n["publisher"], n["when"]] if x)
+                    st.markdown(head + (f"  \n{meta}" if meta else ""))
 
         summary = info.get("longBusinessSummary")
         if summary:
