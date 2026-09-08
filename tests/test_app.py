@@ -162,8 +162,7 @@ def test_translate_offline_safe():
     assert isinstance(app.translate_he("Technology"), str)
 
 
-def test_watchlist_roundtrip(tmp_path, monkeypatch):
-    f = tmp_path / "wl.json"
-    monkeypatch.setattr(app, "_WATCH_FILE", str(f))
-    app.save_watchlist(["aapl", "MSFT", "aapl"])
-    assert app.load_watchlist() == ["AAPL", "MSFT"]
+def test_clean_watchlist():
+    assert app.clean_watchlist([" aapl ", "MSFT", "aapl", ""]) == ["AAPL", "MSFT"]
+    assert app.clean_watchlist(None) == []
+    assert len(app.clean_watchlist([str(i) for i in range(60)])) == 40

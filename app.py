@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import json
 import math
-import os
 import time
 import urllib.parse
 import urllib.request
@@ -692,26 +691,11 @@ def get_calendar_info(symbol: str) -> dict:
 
 
 # ----------------------------------------------------------------------------
-# רשימת מעקב — נשמרת מקומית לקובץ (best-effort; מתאפס בפריסה מחדש בענן)
+# רשימת מעקב — פר-משתמש, ב-session_state בלבד (בטוח לאפליקציה ציבורית משותפת;
+# נשמרת כל עוד הכרטיסייה פתוחה, לא מסונכרנת בין מבקרים).
 # ----------------------------------------------------------------------------
-_WATCH_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "watchlist.json")
-
-
-def load_watchlist() -> list:
-    try:
-        with open(_WATCH_FILE, encoding="utf-8") as fh:
-            data = json.load(fh)
-        return list(dict.fromkeys(str(x).upper() for x in data))[:40]
-    except Exception:
-        return []
-
-
-def save_watchlist(items: list) -> None:
-    try:
-        with open(_WATCH_FILE, "w", encoding="utf-8") as fh:
-            json.dump(list(dict.fromkeys(items)), fh)
-    except Exception:
-        pass
+def clean_watchlist(items) -> list:
+    return list(dict.fromkeys(str(x).strip().upper() for x in (items or []) if str(x).strip()))[:40]
 
 
 # ----------------------------------------------------------------------------
@@ -1340,7 +1324,7 @@ def main() -> None:
         st.markdown("---")
         st.markdown("### ⚡ מעקב ובחירה מהירה")
         _QUICK = ["AAPL", "MSFT", "NVDA", "GOOGL", "AMZN", "TSLA", "META", "BTC-USD"]
-        wl = st.session_state.setdefault("watchlist", load_watchlist())
+        wl = st.session_state.setdefault("watchlist", [])
         recent = st.session_state.get("recent", [])
         pick_opts = ["—"] + list(dict.fromkeys(wl + recent + _QUICK))
 
@@ -1356,11 +1340,10 @@ def main() -> None:
 
         new_wl = st.multiselect(
             "⭐ רשימת מעקב", options=list(dict.fromkeys(wl + recent + _QUICK)), default=wl,
-            help="בחר סימולים למעקב — נשמרים בין הפעלות (מקומית).",
+            help="הרשימה פרטית לך ונשמרת כל עוד הכרטיסייה פתוחה.",
         )
         if set(new_wl) != set(wl):
-            st.session_state["watchlist"] = new_wl
-            save_watchlist(new_wl)
+            st.session_state["watchlist"] = clean_watchlist(new_wl)
             st.rerun()
 
         st.caption(
@@ -1414,7 +1397,7 @@ def main() -> None:
         ):
             _wl = st.session_state.setdefault("watchlist", [])
             _wl.remove(_cur) if _in_wl else _wl.append(_cur)
-            save_watchlist(_wl)
+            st.session_state["watchlist"] = clean_watchlist(_wl)
             st.rerun()
 
     if not st.session_state.get("run"):
