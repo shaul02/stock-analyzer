@@ -123,32 +123,68 @@ def _fetch_history(symbol: str, period: str, attempts: int = 3):
     return (hist if hist is not None else None), last_err
 
 
+_PERIOD_DAYS = {"6mo": 190, "1y": 380, "2y": 760, "5y": 1850, "10y": 3700, "max": 12000}
+
+
+def _fetch_stooq(symbol: str, period: str):
+    """מקור מחיר עצמאי וחינמי (Stooq) — משמש כגיבוי כש-Yahoo לא זמין."""
+    sym = symbol.lower().strip()
+    candidates = [sym] if "." in sym else [f"{sym}.us", sym]
+    for cand in candidates:
+        url = f"https://stooq.com/q/d/l/?s={urllib.parse.quote(cand)}&i=d"
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                raw = resp.read().decode("utf-8")
+            if not raw.startswith("Date"):
+                continue
+            from io import StringIO
+
+            df = pd.read_csv(StringIO(raw), parse_dates=["Date"]).set_index("Date")
+            df = df.rename(columns=str.capitalize)
+            if df.empty or "Close" not in df:
+                continue
+            df = df.dropna(subset=["Close"]).tail(_PERIOD_DAYS.get(period, 760))
+            if "Volume" not in df:
+                df["Volume"] = 0
+            return df[["Open", "High", "Low", "Close", "Volume"]], None
+        except Exception as err:  # noqa: BLE001
+            last = err
+    return None, locals().get("last")
+
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def load_data(symbol: str, period: str):
-    """מחזיר (hist, info, err, used_symbol, resolved_name).
+    """מחזיר (hist, info, err, used_symbol, resolved_name, price_source).
 
     אם הסימול שהוזן לא קיים, מנסה לפענח שם חברה (למשל 'NVIDIA' -> 'NVDA').
+    אם Yahoo לא מחזיר מחירים — נופל ל-Stooq.
     """
     used = (symbol or "").strip().upper()
+    price_source = "Yahoo Finance"
     hist, err = _fetch_history(used, period)
 
     resolved_name = None
     if hist is None or hist.empty:
         alt_sym, alt_name = resolve_symbol(symbol)
         if alt_sym and alt_sym.upper() != used:
-            hist2, err2 = _fetch_history(alt_sym, period)
+            hist2, _ = _fetch_history(alt_sym, period)
             if hist2 is not None and not hist2.empty:
                 used, hist, err, resolved_name = alt_sym.upper(), hist2, None, alt_name
 
     if hist is None or hist.empty:
-        return None, {}, err, used, None
+        stooq_hist, stooq_err = _fetch_stooq(used, period)
+        if stooq_hist is not None and not stooq_hist.empty:
+            hist, err, price_source = stooq_hist, None, "Stooq"
+        else:
+            return None, {}, err or stooq_err, used, None, None
 
     try:
         info = yf.Ticker(used).info or {}
     except Exception:
         info = {}
 
-    return hist, info, None, used, resolved_name
+    return hist, info, None, used, resolved_name, price_source
 
 
 # ----------------------------------------------------------------------------
@@ -258,6 +294,233 @@ def pe_ratio(info: dict, price):
         return float(forward), "forwardPE מ-yfinance (מכפיל עתידי)"
 
     return None, "לא זמין"
+
+
+# ----------------------------------------------------------------------------
+# נתונים פיננסיים מורחבים מ-yfinance (הרבה מעבר לכמה מכפילים)
+# ----------------------------------------------------------------------------
+def financial_sections(info: dict, price=None) -> dict:
+    """מחזיר dict מסודר: {שם קטגוריה: {תווית: ערך מוכן לתצוגה}}."""
+    g = info.get
+
+    def money(key):
+        return human_number(g(key))
+
+    def num(key, digits=2, suffix=""):
+        return fmt(g(key), suffix=suffix, digits=digits)
+
+    def pct(key, digits=2):
+        v = g(key)
+        return fmt(v, pct=True, digits=digits) if v is not None else "—"
+
+    fcf = g("freeCashflow")
+    mcap = g("marketCap")
+    p_fcf = fmt(mcap / fcf) if (mcap and fcf) else "—"
+
+    return {
+        "הערכת שווי (Valuation)": {
+            "שווי שוק": money("marketCap"),
+            "שווי מיזם (EV)": money("enterpriseValue"),
+            "מכפיל רווח נגרר (P/E)": num("trailingPE"),
+            "מכפיל רווח עתידי (Fwd P/E)": num("forwardPE"),
+            "מכפיל PEG": num("trailingPegRatio") if g("trailingPegRatio") else num("pegRatio"),
+            "מחיר / מכירות (P/S)": num("priceToSalesTrailing12Months"),
+            "מחיר / הון עצמי (P/B)": num("priceToBook"),
+            "EV / EBITDA": num("enterpriseToEbitda"),
+            "EV / הכנסות": num("enterpriseToRevenue"),
+            "מחיר / תזרים חופשי (P/FCF)": p_fcf,
+        },
+        "רווחיות (Profitability)": {
+            "שולי רווח גולמי": pct("grossMargins"),
+            "שולי רווח תפעולי": pct("operatingMargins"),
+            "שולי רווח נקי": pct("profitMargins"),
+            "שולי EBITDA": pct("ebitdaMargins"),
+            "תשואה על ההון (ROE)": pct("returnOnEquity"),
+            "תשואה על הנכסים (ROA)": pct("returnOnAssets"),
+        },
+        "צמיחה (Growth)": {
+            "צמיחת הכנסות (שנתי)": pct("revenueGrowth"),
+            "צמיחת רווח (שנתי)": pct("earningsGrowth"),
+            "צמיחת רווח רבעוני (YoY)": pct("earningsQuarterlyGrowth"),
+            "הכנסות 12 חודשים": money("totalRevenue"),
+            "רווח נקי (12 ח')": money("netIncomeToCommon"),
+            "EBITDA": money("ebitda"),
+        },
+        "איתנות פיננסית (Balance Sheet)": {
+            "מזומן ושווי מזומן": money("totalCash"),
+            "חוב כולל": money("totalDebt"),
+            "חוב נטו": human_number((g("totalDebt") or 0) - (g("totalCash") or 0))
+            if (g("totalDebt") or g("totalCash")) else "—",
+            "יחס חוב להון (D/E)": num("debtToEquity"),
+            "יחס שוטף (Current)": num("currentRatio"),
+            "יחס מהיר (Quick)": num("quickRatio"),
+            "מזומן למניה": num("totalCashPerShare"),
+            "תזרים חופשי (FCF)": money("freeCashflow"),
+            "תזרים תפעולי": money("operatingCashflow"),
+        },
+        "דיבידנד": {
+            "דיבידנד למניה (שנתי)": num("dividendRate"),
+            "תשואת דיבידנד": pct("dividendYield"),
+            "תשואה ממוצעת 5 שנים": pct("fiveYearAvgDividendYield")
+            if g("fiveYearAvgDividendYield") else "—",
+            "יחס חלוקה (Payout)": pct("payoutRatio"),
+        },
+        "תחזית אנליסטים": {
+            "המלצה": str(g("recommendationKey") or "—").upper(),
+            "מספר אנליסטים": num("numberOfAnalystOpinions", digits=0),
+            "מחיר יעד ממוצע": num("targetMeanPrice"),
+            "מחיר יעד גבוה": num("targetHighPrice"),
+            "מחיר יעד נמוך": num("targetLowPrice"),
+            "פוטנציאל מול מחיר נוכחי":
+                fmt((g("targetMeanPrice") / price - 1), pct=True)
+                if (g("targetMeanPrice") and price) else "—",
+        },
+        "מניה ומסחר": {
+            "מניות במחזור": money("sharesOutstanding"),
+            "מניות חופשיות (Float)": money("floatShares"),
+            "אחזקת מוסדיים": pct("heldPercentInstitutions"),
+            "פוזיציות שורט (% מ-Float)": pct("shortPercentOfFloat"),
+            "בטא (Beta)": num("beta"),
+            "טווח 52 שבועות": f'{fmt(g("fiftyTwoWeekLow"))} – {fmt(g("fiftyTwoWeekHigh"))}',
+            "מחזור מסחר ממוצע": money("averageVolume"),
+        },
+    }
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_statements(symbol: str) -> dict:
+    """דוחות כספיים (שנתי + רבעוני) מ-yfinance. dict של DataFrames, ריק אם אין."""
+    out = {}
+    try:
+        tk = yf.Ticker(symbol)
+        pairs = {
+            "דוח רווח והפסד (שנתי)": "income_stmt",
+            "דוח רווח והפסד (רבעוני)": "quarterly_income_stmt",
+            "מאזן (שנתי)": "balance_sheet",
+            "מאזן (רבעוני)": "quarterly_balance_sheet",
+            "תזרים מזומנים (שנתי)": "cashflow",
+            "תזרים מזומנים (רבעוני)": "quarterly_cashflow",
+        }
+        for label, attr in pairs.items():
+            try:
+                df = getattr(tk, attr)
+                if df is not None and not df.empty:
+                    df = df.copy()
+                    df.columns = [str(c)[:10] for c in df.columns]
+                    out[label] = df
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return out
+
+
+# ----------------------------------------------------------------------------
+# מקור עצמאי #2: SEC EDGAR — דוחות רשמיים מוגשים (חינמי לגמרי, ללא מפתח).
+# רלוונטי לחברות אמריקאיות בלבד.
+# ----------------------------------------------------------------------------
+_SEC_UA = {"User-Agent": "stock-analyzer educational project contact@example.com"}
+# (תווית, [מפתחות us-gaap אפשריים], instant?) — instant=מאזן (ערך רגעי), אחרת "זרימה" שנתית
+_SEC_CONCEPTS = [
+    ("הכנסות", ["RevenueFromContractWithCustomerExcludingAssessedTax", "Revenues",
+                "SalesRevenueNet", "RevenueFromContractWithCustomerIncludingAssessedTax"], False),
+    ("רווח נקי", ["NetIncomeLoss", "ProfitLoss"], False),
+    ("רווח תפעולי", ["OperatingIncomeLoss"], False),
+    ("סך נכסים", ["Assets"], True),
+    ("סך התחייבויות", ["Liabilities"], True),
+    ("הון עצמי", ["StockholdersEquity",
+                  "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest"], True),
+    ("רווח למניה מדולל", ["EarningsPerShareDiluted", "EarningsPerShareBasicAndDiluted"], False),
+]
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def _sec_ticker_map() -> dict:
+    try:
+        req = urllib.request.Request("https://www.sec.gov/files/company_tickers.json", headers=_SEC_UA)
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            raw = json.loads(resp.read().decode("utf-8"))
+        return {v["ticker"].upper(): str(v["cik_str"]).zfill(10) for v in raw.values()}
+    except Exception:
+        return {}
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def get_sec_facts(symbol: str):
+    """מחזיר (DataFrame שנתי לפי שנה, note). DataFrame ריק אם לא רלוונטי/נכשל."""
+    cik = _sec_ticker_map().get((symbol or "").upper())
+    if not cik:
+        return pd.DataFrame(), "לא נמצאה חברה אמריקאית תואמת ב-SEC EDGAR (רלוונטי למניות בארה\"ב)."
+    try:
+        url = f"https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json"
+        req = urllib.request.Request(url, headers=_SEC_UA)
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            facts = json.loads(resp.read().decode("utf-8")).get("facts", {}).get("us-gaap", {})
+    except Exception as err:  # noqa: BLE001
+        return pd.DataFrame(), f"קריאת SEC EDGAR נכשלה: {err}"
+
+    def _annual_by_year(concept: dict, instant: bool) -> dict:
+        # year -> (fy-of-filing, value); שנה מפתח = שנת סוף התקופה
+        picked: dict[int, tuple] = {}
+        for entries in concept.get("units", {}).values():
+            for e in entries:
+                if e.get("form") not in ("10-K", "20-F"):
+                    continue
+                end = e.get("end")
+                start = e.get("start")
+                if not end:
+                    continue
+                try:
+                    end_ts = pd.Timestamp(end)
+                except Exception:
+                    continue
+                if instant:
+                    if start:  # רוצים ערך רגעי (מאזן), לא טווח
+                        continue
+                else:
+                    if not start:
+                        continue
+                    try:
+                        days = (end_ts - pd.Timestamp(start)).days
+                    except Exception:
+                        continue
+                    if not (300 <= days <= 400):  # שנה מלאה בלבד
+                        continue
+                yr = end_ts.year
+                fyf = e.get("fy") or 0
+                if yr not in picked or fyf >= picked[yr][0]:
+                    picked[yr] = (fyf, e.get("val"))
+        return {yr: v for yr, (_, v) in picked.items()}
+
+    rows = {}
+    for he_label, keys, instant in _SEC_CONCEPTS:
+        best, best_score = {}, (-1, -1)
+        for k in keys:
+            if k not in facts:
+                continue
+            cand = _annual_by_year(facts[k], instant)
+            if not cand:
+                continue
+            score = (max(cand), len(cand))  # מעדיפים concept עם השנה העדכנית ביותר
+            if score > best_score:
+                best, best_score = cand, score
+        for yr, val in best.items():
+            rows.setdefault(yr, {})[he_label] = val
+
+    # השלמה: אם חסרות "סך התחייבויות" אך יש נכסים והון — נגזור
+    for yr, r in rows.items():
+        if r.get("סך התחייבויות") is None and r.get("סך נכסים") and r.get("הון עצמי"):
+            r["סך התחייבויות"] = r["סך נכסים"] - r["הון עצמי"]
+
+    if not rows:
+        return pd.DataFrame(), "SEC EDGAR: לא נמצאו נתוני דוח שנתי במבנה צפוי."
+
+    years = sorted(rows)[-6:]
+    table = pd.DataFrame(
+        {str(y): rows[y] for y in years},
+        index=[lbl for lbl, _, _ in _SEC_CONCEPTS],
+    )
+    return table, f"מקור: SEC EDGAR · CIK {cik} · דוחות 10-K/20-F רשמיים."
 
 
 # ----------------------------------------------------------------------------
@@ -753,7 +1016,7 @@ def main() -> None:
         st.stop()
 
     with st.spinner(f"טוען נתונים עבור {symbol}…"):
-        hist, info, load_err, used_symbol, resolved_name = load_data(symbol, period)
+        hist, info, load_err, used_symbol, resolved_name, price_source = load_data(symbol, period)
 
     if hist is None or hist.empty:
         st.error(
@@ -769,6 +1032,11 @@ def main() -> None:
     symbol = used_symbol
     if resolved_name:
         st.success(f"לא נמצא הסימול שהוזן — מוצג במקומו **{used_symbol}** ({resolved_name}).")
+    if price_source and price_source != "Yahoo Finance":
+        st.warning(
+            f"נתוני Yahoo לא היו זמינים — נתוני המחיר נשלפו מ**{price_source}**. "
+            "ייתכן שחלק מהנתונים הפיננסיים חסרים."
+        )
 
     df = add_indicators(hist)
     latest = df.iloc[-1]
@@ -855,44 +1123,61 @@ def main() -> None:
 
     # --- נתונים פיננסיים ---
     with tab_fund:
-        st.subheader("נתונים פיננסיים בסיסיים")
+        st.subheader("נתונים פיננסיים")
 
-        fc1, fc2 = st.columns(2)
-        fc1.metric("מכפיל רווח (P/E)", fmt(pe) if pe else "—")
-        fc1.caption(f"מקור: {pe_source}")
-        fc2.metric("שווי שוק", human_number(info.get("marketCap")))
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("מכפיל רווח (P/E)", fmt(pe) if pe else "—")
+        c2.metric("שווי שוק", human_number(info.get("marketCap")))
+        c3.metric("רווח למניה (EPS)", fmt(info.get("trailingEps")))
+        _tgt = info.get("targetMeanPrice")
+        c4.metric("מחיר יעד ממוצע", fmt(_tgt) if _tgt else "—",
+                  f"{(_tgt / price - 1) * 100:+.1f}%" if (_tgt and price) else None)
 
-        div_yield = info.get("dividendYield")
-        fundamentals = {
-            "שם החברה": company_name,
-            "סקטור": sector or "—",
-            "תעשייה": industry or "—",
-            "בורסה": info.get("exchange", "—"),
-            "מטבע": currency or "—",
-            "מחיר נוכחי": fmt(info.get("currentPrice") or price),
-            "שווי שוק": human_number(info.get("marketCap")),
-            "מכפיל רווח (P/E)": fmt(pe) if pe else "—",
-            "מכפיל רווח עתידי (Forward P/E)": fmt(info.get("forwardPE")),
-            "מכפיל PEG": fmt(info.get("pegRatio")),
-            "רווח למניה (EPS)": fmt(info.get("trailingEps")),
-            "תשואת דיבידנד": fmt(div_yield, pct=True) if div_yield else "—",
-            "מכפיל מחיר/מכירות (P/S)": fmt(info.get("priceToSalesTrailing12Months")),
-            "מכפיל הון (P/B)": fmt(info.get("priceToBook")),
-            "בטא (Beta)": fmt(info.get("beta")),
-            "שיא 52 שבועות": fmt(info.get("fiftyTwoWeekHigh")),
-            "שפל 52 שבועות": fmt(info.get("fiftyTwoWeekLow")),
-            "מחזור מסחר ממוצע": human_number(info.get("averageVolume")),
-        }
-        fund_df = pd.DataFrame(
-            {"פרמטר": list(fundamentals.keys()), "ערך": list(fundamentals.values())}
+        st.markdown(
+            f"**{company_name}** · {sector or '—'} · {industry or '—'} · "
+            f"{info.get('exchange', '—')} · {currency or '—'}"
         )
-        st.dataframe(fund_df, hide_index=True, use_container_width=True)
+
+        sections = financial_sections(info, price)
+        for title, rows in sections.items():
+            vals = [str(v) for v in rows.values()]
+            if all(v in ("—", "nan", "None", "") for v in vals):
+                continue
+            with st.expander(title, expanded=title.startswith("הערכת שווי")):
+                st.table(pd.DataFrame({"פרמטר": list(rows), "ערך": vals}).set_index("פרמטר"))
 
         if not info or len(info) < 5:
             st.warning(
-                "Yahoo Finance החזיר מידע חברה חלקי או ריק עבור סימול זה. "
-                "נתוני המחיר והאינדיקטורים עדיין תקינים."
+                "Yahoo Finance החזיר מידע חברה חלקי או ריק. נסה שוב בעוד דקה, "
+                "או ראה את מקור SEC EDGAR למטה (למניות ארה\"ב)."
             )
+
+        # --- מקור עצמאי #2: SEC EDGAR ---
+        st.markdown("### 🏛️ מקור עצמאי: SEC EDGAR (דוחות רשמיים)")
+        sec_df, sec_note = get_sec_facts(symbol)
+        if sec_df is not None and not sec_df.empty:
+            show = sec_df.map(lambda v: human_number(v) if isinstance(v, (int, float)) else v)
+            st.table(show)
+        st.caption(sec_note)
+
+        # --- דוחות כספיים מלאים (yfinance) ---
+        st.markdown("### 📑 דוחות כספיים מלאים")
+        statements = get_statements(symbol)
+        if statements:
+            for label, sdf in statements.items():
+                with st.expander(label):
+                    show = sdf.map(
+                        lambda v: human_number(v) if isinstance(v, (int, float)) and pd.notna(v) else v
+                    )
+                    st.dataframe(show, use_container_width=True)
+        else:
+            st.caption("לא התקבלו דוחות כספיים עבור סימול זה.")
+
+        st.caption(
+            f"מקורות: נתוני מחיר — {price_source or 'Yahoo Finance'} · "
+            "מכפילים ותחזיות — Yahoo Finance · דוחות רשמיים — SEC EDGAR (data.sec.gov). "
+            "ערכים ממקורות שונים עשויים להיות מעודכנים לתאריכים שונים."
+        )
 
     # --- ניתוח טכני ---
     with tab_tech:
