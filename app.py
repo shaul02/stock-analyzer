@@ -165,6 +165,13 @@ def load_data(symbol: str, period: str):
     hist, err = _fetch_history(used, period)
 
     resolved_name = None
+
+    # אולי הוזן סימול קריפטו בלי הסיומת (BTC -> BTC-USD)
+    if (hist is None or hist.empty) and used and used.isalnum() and len(used) <= 5:
+        hist_c, _ = _fetch_history(f"{used}-USD", period)
+        if hist_c is not None and not hist_c.empty:
+            used, hist, err = f"{used}-USD", hist_c, None
+
     if hist is None or hist.empty:
         alt_sym, alt_name = resolve_symbol(symbol)
         if alt_sym and alt_sym.upper() != used:
@@ -384,6 +391,33 @@ def financial_sections(info: dict, price=None) -> dict:
             "טווח 52 שבועות": f'{fmt(g("fiftyTwoWeekLow"))} – {fmt(g("fiftyTwoWeekHigh"))}',
             "מחזור מסחר ממוצע": money("averageVolume"),
         },
+    }
+
+
+def is_crypto(info: dict, symbol: str = "") -> bool:
+    return (info.get("quoteType") or "").upper() == "CRYPTOCURRENCY" or \
+        symbol.upper().endswith(("-USD", "-EUR", "-USDT"))
+
+
+def crypto_sections(info: dict, price=None) -> dict:
+    """סעיפי מידע רלוונטיים למטבע קריפטו (במקום נתוני יסוד של חברה)."""
+    g = info.get
+    supply = g("circulatingSupply")
+    max_supply = g("maxSupply") or g("totalSupply")
+    return {
+        "נתוני מטבע": {
+            "שווי שוק": human_number(g("marketCap")),
+            "היצע במחזור": human_number(supply),
+            "היצע מרבי / כולל": human_number(max_supply),
+            "אחוז מההיצע המרבי":
+                fmt(supply / max_supply, pct=True) if (supply and max_supply) else "—",
+            "נפח מסחר 24 שעות":
+                human_number(g("volume24Hr") or g("regularMarketVolume") or g("volume")),
+            "מטבע התייחסות": g("currency") or "USD",
+            "אלגוריתם": g("algorithm") or "—",
+            "טווח 52 שבועות":
+                f'{fmt(g("fiftyTwoWeekLow"))} – {fmt(g("fiftyTwoWeekHigh"))}',
+        }
     }
 
 
@@ -982,8 +1016,8 @@ def main() -> None:
         c1, c2, c3 = st.columns([3, 1, 1])
         with c1:
             symbol_input = st.text_input(
-                "סימול מניה או שם חברה", value="AAPL",
-                placeholder="לדוגמה: AAPL · TSLA · NVDA · או שם: NVIDIA, Apple",
+                "סימול / שם חברה / קריפטו", value="AAPL",
+                placeholder="מניה: AAPL, NVIDIA · בורסות עולם: TEVA.TA, SAP.DE · קריפטו: BTC, ETH-USD",
             )
         with c2:
             period = st.selectbox(
@@ -1005,7 +1039,10 @@ def main() -> None:
             st.rerun()
 
     if not st.session_state.get("run"):
-        st.info("הזן סימול מניה (או שם חברה) למעלה ולחץ על **נתח מניה**.")
+        st.info(
+            "הזן סימול מניה, שם חברה, או מטבע קריפטו (למשל `BTC`, `ETH-USD`) "
+            "למעלה ולחץ על **נתח מניה**."
+        )
         st.stop()
 
     symbol = st.session_state["symbol"]
@@ -1056,13 +1093,17 @@ def main() -> None:
     currency = info.get("currency", "")
     sector = maybe_he(info.get("sector"), translate_on)
     industry = maybe_he(info.get("industry"), translate_on)
+    crypto = is_crypto(info, symbol)
 
     # --- שורת מדדים עליונה ---
     m1, m2, m3, m4 = st.columns(4)
     m1.metric(f"{symbol} — מחיר אחרון", f"{price:,.2f} {currency}".strip())
     m2.metric("שינוי יומי", f"{day_change:+,.2f}", f"{day_change_pct:+.2f}%")
     m3.metric(f"שינוי בטווח ({period})", f"{period_change_pct:+.2f}%")
-    m4.metric("מכפיל רווח (P/E)", fmt(pe) if pe else "—")
+    if crypto:
+        m4.metric("שווי שוק", human_number(info.get("marketCap")))
+    else:
+        m4.metric("מכפיל רווח (P/E)", fmt(pe) if pe else "—")
 
     if len(df) < 200:
         st.info(
@@ -1104,6 +1145,11 @@ def main() -> None:
             "הפסק נקבע אוטומטית מתוך שקלול האיתותים בכל טווח: כל טווח שמקבל ניקוד ‎+2‎ "
             "ומעלה נחשב 'חיובי'. אם לפחות טווח אחד חיובי — התשובה 'כן', עם ציון הטווחים."
         )
+        if crypto:
+            st.caption(
+                "עבור קריפטו הניקוד מבוסס על אינדיקטורים טכניים בלבד (אין נתוני יסוד "
+                "כמו P/E). קריפטו תנודתי מאוד — יש להתייחס לתוצאה בזהירות רבה."
+            )
 
         cols = st.columns(3)
         for col, (name, h) in zip(cols, reco["horizons"].items()):
@@ -1123,61 +1169,77 @@ def main() -> None:
 
     # --- נתונים פיננסיים ---
     with tab_fund:
-        st.subheader("נתונים פיננסיים")
+        if crypto:
+            st.subheader(f"נתוני מטבע — {company_name}")
+            st.info(
+                "מדובר במטבע קריפטו. נתוני יסוד של חברה (מכפיל רווח, דוחות כספיים, "
+                "תחזיות אנליסטים, SEC) אינם רלוונטיים; מוצגים נתוני היצע, שווי שוק ונפח מסחר."
+            )
+            for title, rows in crypto_sections(info, price).items():
+                vals = [str(v) for v in rows.values()]
+                with st.expander(title, expanded=True):
+                    st.table(pd.DataFrame({"פרמטר": list(rows), "ערך": vals}).set_index("פרמטר"))
+            st.caption(
+                f"מקורות: נתוני מחיר ומטבע — {price_source or 'Yahoo Finance'} "
+                "(CoinMarketCap דרך yfinance). ניתוח טכני מלא זמין בכרטיסייה 'ניתוח טכני'."
+            )
+        else:
+            st.subheader("נתונים פיננסיים")
 
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("מכפיל רווח (P/E)", fmt(pe) if pe else "—")
-        c2.metric("שווי שוק", human_number(info.get("marketCap")))
-        c3.metric("רווח למניה (EPS)", fmt(info.get("trailingEps")))
-        _tgt = info.get("targetMeanPrice")
-        c4.metric("מחיר יעד ממוצע", fmt(_tgt) if _tgt else "—",
-                  f"{(_tgt / price - 1) * 100:+.1f}%" if (_tgt and price) else None)
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("מכפיל רווח (P/E)", fmt(pe) if pe else "—")
+            c2.metric("שווי שוק", human_number(info.get("marketCap")))
+            c3.metric("רווח למניה (EPS)", fmt(info.get("trailingEps")))
+            _tgt = info.get("targetMeanPrice")
+            c4.metric("מחיר יעד ממוצע", fmt(_tgt) if _tgt else "—",
+                      f"{(_tgt / price - 1) * 100:+.1f}%" if (_tgt and price) else None)
 
-        st.markdown(
-            f"**{company_name}** · {sector or '—'} · {industry or '—'} · "
-            f"{info.get('exchange', '—')} · {currency or '—'}"
-        )
-
-        sections = financial_sections(info, price)
-        for title, rows in sections.items():
-            vals = [str(v) for v in rows.values()]
-            if all(v in ("—", "nan", "None", "") for v in vals):
-                continue
-            with st.expander(title, expanded=title.startswith("הערכת שווי")):
-                st.table(pd.DataFrame({"פרמטר": list(rows), "ערך": vals}).set_index("פרמטר"))
-
-        if not info or len(info) < 5:
-            st.warning(
-                "Yahoo Finance החזיר מידע חברה חלקי או ריק. נסה שוב בעוד דקה, "
-                "או ראה את מקור SEC EDGAR למטה (למניות ארה\"ב)."
+            st.markdown(
+                f"**{company_name}** · {sector or '—'} · {industry or '—'} · "
+                f"{info.get('exchange', '—')} · {currency or '—'}"
             )
 
-        # --- מקור עצמאי #2: SEC EDGAR ---
-        st.markdown("### 🏛️ מקור עצמאי: SEC EDGAR (דוחות רשמיים)")
-        sec_df, sec_note = get_sec_facts(symbol)
-        if sec_df is not None and not sec_df.empty:
-            show = sec_df.map(lambda v: human_number(v) if isinstance(v, (int, float)) else v)
-            st.table(show)
-        st.caption(sec_note)
+            sections = financial_sections(info, price)
+            for title, rows in sections.items():
+                vals = [str(v) for v in rows.values()]
+                if all(v in ("—", "nan", "None", "") for v in vals):
+                    continue
+                with st.expander(title, expanded=title.startswith("הערכת שווי")):
+                    st.table(pd.DataFrame({"פרמטר": list(rows), "ערך": vals}).set_index("פרמטר"))
 
-        # --- דוחות כספיים מלאים (yfinance) ---
-        st.markdown("### 📑 דוחות כספיים מלאים")
-        statements = get_statements(symbol)
-        if statements:
-            for label, sdf in statements.items():
-                with st.expander(label):
-                    show = sdf.map(
-                        lambda v: human_number(v) if isinstance(v, (int, float)) and pd.notna(v) else v
-                    )
-                    st.dataframe(show, use_container_width=True)
-        else:
-            st.caption("לא התקבלו דוחות כספיים עבור סימול זה.")
+            if not info or len(info) < 5:
+                st.warning(
+                    "Yahoo Finance החזיר מידע חברה חלקי או ריק. נסה שוב בעוד דקה, "
+                    "או ראה את מקור SEC EDGAR למטה (למניות ארה\"ב)."
+                )
 
-        st.caption(
-            f"מקורות: נתוני מחיר — {price_source or 'Yahoo Finance'} · "
-            "מכפילים ותחזיות — Yahoo Finance · דוחות רשמיים — SEC EDGAR (data.sec.gov). "
-            "ערכים ממקורות שונים עשויים להיות מעודכנים לתאריכים שונים."
-        )
+            # --- מקור עצמאי #2: SEC EDGAR ---
+            st.markdown("### 🏛️ מקור עצמאי: SEC EDGAR (דוחות רשמיים)")
+            sec_df, sec_note = get_sec_facts(symbol)
+            if sec_df is not None and not sec_df.empty:
+                show = sec_df.map(lambda v: human_number(v) if isinstance(v, (int, float)) else v)
+                st.table(show)
+            st.caption(sec_note)
+
+            # --- דוחות כספיים מלאים (yfinance) ---
+            st.markdown("### 📑 דוחות כספיים מלאים")
+            statements = get_statements(symbol)
+            if statements:
+                for label, sdf in statements.items():
+                    with st.expander(label):
+                        show = sdf.map(
+                            lambda v: human_number(v)
+                            if isinstance(v, (int, float)) and pd.notna(v) else v
+                        )
+                        st.dataframe(show, use_container_width=True)
+            else:
+                st.caption("לא התקבלו דוחות כספיים עבור סימול זה.")
+
+            st.caption(
+                f"מקורות: נתוני מחיר — {price_source or 'Yahoo Finance'} · "
+                "מכפילים ותחזיות — Yahoo Finance · דוחות רשמיים — SEC EDGAR (data.sec.gov). "
+                "ערכים ממקורות שונים עשויים להיות מעודכנים לתאריכים שונים."
+            )
 
     # --- ניתוח טכני ---
     with tab_tech:
