@@ -77,13 +77,25 @@ streamlit run app.py
 
 ```
 app.py                  קוד האפליקציה
-requirements.txt        רשימת הספריות
+requirements.txt        ספריות (טווחי גרסאות עם חסם עליון)
+requirements-dev.txt    + pytest לפיתוח
+tests/test_app.py       בדיקות יחידה ללוגיקה הטהורה (23 בדיקות)
 .streamlit/config.toml  עיצוב בסיסי
 run.bat                 הפעלה בלחיצה כפולה (Windows)
 run.ps1                 הפעלה מ-PowerShell
 .gitignore              קבצים שלא נשמרים ב-Git
 README.md               הקובץ הזה
 ```
+
+### בדיקות (פיתוח)
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest -q
+```
+
+הבדיקות רצות ללא רשת (נתונים סינתטיים) ומכסות אינדיקטורים, הניקוד הטכני, הבקטסט,
+פורמט מספרים/מטבע, זיהוי קריפטו ובניית הגרפים.
 
 ---
 

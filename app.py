@@ -233,6 +233,29 @@ def is_num(x) -> bool:
     return x is not None and not (isinstance(x, float) and math.isnan(x))
 
 
+_CCY = {
+    "USD": "$", "EUR": "€", "GBP": "£", "GBp": "p", "ILS": "₪", "ILA": "₪",
+    "JPY": "¥", "CNY": "¥", "HKD": "HK$", "CAD": "C$", "AUD": "A$", "NZD": "NZ$",
+    "CHF": "CHF ", "INR": "₹", "KRW": "₩", "BRL": "R$", "SEK": "kr ", "NOK": "kr ",
+    "DKK": "kr ", "ZAR": "R ", "MXN": "MX$", "SGD": "S$", "TWD": "NT$", "TRY": "₺",
+}
+
+
+def ccy_sym(code: str) -> str:
+    if not code:
+        return ""
+    return _CCY.get(code, f"{code} ")
+
+
+def price_str(value, code: str = "", digits: int = 2) -> str:
+    if value is None:
+        return "—"
+    try:
+        return f"{ccy_sym(code)}{float(value):,.{digits}f}"
+    except (TypeError, ValueError):
+        return "—"
+
+
 # ----------------------------------------------------------------------------
 # תרגום אופציונלי לעברית (שירות חינמי, ללא מפתח). נכשל בשקט -> מחזיר מקור.
 # ----------------------------------------------------------------------------
@@ -1453,9 +1476,10 @@ def main() -> None:
     industry = maybe_he(info.get("industry"), translate_on)
     crypto = is_crypto(info, symbol)
 
-    # --- שורת מדדים עליונה ---
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric(f"{symbol} — מחיר אחרון", f"{price:,.2f} {currency}".strip())
+    # --- שורת מדדים עליונה (2 עמודות — קריא גם בטלפון) ---
+    m1, m2 = st.columns(2)
+    m3, m4 = st.columns(2)
+    m1.metric(f"{symbol} — מחיר אחרון", price_str(price, currency))
     m2.metric("שינוי יומי", f"{day_change:+,.2f}", f"{day_change_pct:+.2f}%")
     m3.metric(f"שינוי בטווח ({period})", f"{period_change_pct:+.2f}%")
     if crypto:
@@ -1548,7 +1572,8 @@ def main() -> None:
             if bt is None:
                 st.caption("אין מספיק היסטוריה לבקטסט — בחר טווח נתונים ארוך יותר (2y ומעלה).")
             else:
-                b1, b2, b3, b4 = st.columns(4)
+                b1, b2 = st.columns(2)
+                b3, b4 = st.columns(2)
                 b1.metric("תשואת האסטרטגיה", f"{bt['strategy_return'] * 100:+.1f}%")
                 b2.metric("קנייה והחזקה", f"{bt['buyhold_return'] * 100:+.1f}%")
                 b3.metric(
@@ -1597,12 +1622,13 @@ def main() -> None:
         else:
             st.subheader("נתונים פיננסיים")
 
-            c1, c2, c3, c4 = st.columns(4)
+            c1, c2 = st.columns(2)
+            c3, c4 = st.columns(2)
             c1.metric("מכפיל רווח (P/E)", fmt(pe) if pe else "—")
             c2.metric("שווי שוק", human_number(info.get("marketCap")))
             c3.metric("רווח למניה (EPS)", fmt(info.get("trailingEps")))
             _tgt = info.get("targetMeanPrice")
-            c4.metric("מחיר יעד ממוצע", fmt(_tgt) if _tgt else "—",
+            c4.metric("מחיר יעד ממוצע", price_str(_tgt, currency) if _tgt else "—",
                       f"{(_tgt / price - 1) * 100:+.1f}%" if (_tgt and price) else None)
 
             st.markdown(

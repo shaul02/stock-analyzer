@@ -1,7 +1,8 @@
-streamlit>=1.32
-yfinance>=0.2.51
-pandas>=2.1
-numpy>=1.26
-plotly>=5.20
-ta>=0.11.0
-deep-translator>=1.11.4
+# טווחי גרסאות עם חסם עליון — בנייה יציבה ב-Streamlit Cloud בלי הפתעות
+streamlit>=1.40,<2
+yfinance>=0.2.55,<2
+pandas>=2.1,<4
+numpy>=1.26,<3
+plotly>=5.20,<8
+ta>=0.11.0,<1
+deep-translator>=1.11.4,<2
