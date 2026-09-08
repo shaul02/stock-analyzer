@@ -1149,12 +1149,12 @@ _CHART_TXT = {
 
 
 def build_chart(df: pd.DataFrame, symbol: str, dark: bool = False, lang: str = "he",
-                chart_type: str = "line"):
-    d = df.tail(400)
+                chart_type: str = "line", compact: bool = False):
+    d = df.tail(220 if compact else 400)
     t = _CHART_TXT["en" if lang == "en" else "he"]
 
     fig = make_subplots(
-        rows=4, cols=1, shared_xaxes=True, vertical_spacing=0.04,
+        rows=4, cols=1, shared_xaxes=True, vertical_spacing=0.05 if compact else 0.04,
         row_heights=[0.5, 0.13, 0.18, 0.19],
         subplot_titles=(t["title"].format(sym=symbol), t["vol"], "RSI (14)", "MACD (12,26,9)"),
     )
@@ -1206,12 +1206,15 @@ def build_chart(df: pd.DataFrame, symbol: str, dark: bool = False, lang: str = "
 
     fig.update_layout(
         template="plotly_dark" if dark else "plotly_white",
-        height=830, bargap=0,
-        margin=dict(l=40, r=20, t=55, b=30),
-        legend=dict(orientation="h", yanchor="bottom", y=1.03, xanchor="left", x=0),
+        height=560 if compact else 820, bargap=0,
+        margin=dict(l=30, r=10, t=44, b=22) if compact else dict(l=40, r=20, t=55, b=30),
+        legend=dict(orientation="h", yanchor="bottom", y=1.03, xanchor="left", x=0,
+                    font=dict(size=9 if compact else 12)),
         hovermode="x unified",
+        font=dict(size=10 if compact else 12),
         paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
     )
+    fig.update_annotations(font_size=10 if compact else 13)  # כותרות תת-הגרפים
     return fig
 
 
@@ -1244,7 +1247,7 @@ def _compare_row(name: str, info: dict, hist: pd.DataFrame, price: float) -> dic
 
 
 def render_compare(base_symbol: str, base_df: pd.DataFrame, period: str,
-                   others: list, dark: bool) -> None:
+                   others: list, dark: bool, compact: bool = False) -> None:
     st.subheader("⚖️ השוואה")
     st.caption("גרף מחיר מנורמל ל-100 בתחילת התקופה + טבלת מדדים. עד 4 מניות להשוואה.")
 
@@ -1283,15 +1286,18 @@ def render_compare(base_symbol: str, base_df: pd.DataFrame, period: str,
             fig.add_trace(go.Scatter(x=norm.index, y=norm[col], name=str(col), mode="lines"))
         fig.update_layout(
             template="plotly_dark" if dark else "plotly_white",
-            height=440, margin=dict(l=40, r=20, t=30, b=30),
+            height=300 if compact else 440,
+            margin=dict(l=30, r=10, t=24, b=22) if compact else dict(l=40, r=20, t=30, b=30),
             hovermode="x unified", yaxis_title="מנורמל ל-100",
-            legend=dict(orientation="h", y=1.05),
+            legend=dict(orientation="h", y=1.05, font=dict(size=9 if compact else 12)),
+            font=dict(size=10 if compact else 12),
             paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True, config={"responsive": True})
 
     st.markdown("#### טבלת השוואה")
-    st.table(pd.DataFrame(rows).set_index("סימול"))
+    # טרנספוזיציה — מדדים בשורות, מניות בעמודות: נכנס יפה גם במסך טלפון
+    st.table(pd.DataFrame(rows).set_index("סימול").T)
     st.caption("מקור: Yahoo Finance. תאי '—' = הנתון לא זמין למניה זו (נפוץ במניות לא-אמריקאיות).")
 
 
@@ -1306,6 +1312,10 @@ def main() -> None:
         dark = st.toggle("🌙 מצב לילה", key="dark_mode")
         chart_style = st.radio(
             "סוג גרף מחיר", ["קו", "נרות יפניים"], horizontal=True, key="chart_style"
+        )
+        compact_chart = st.toggle(
+            "📱 גרף קומפקטי (לטלפון)", key="compact_chart",
+            help="גרפים נמוכים יותר, פחות היסטוריה — נוח לצפייה במסך של טלפון.",
         )
         eng_chart = st.toggle(
             "תוויות גרף באנגלית", key="eng_chart",
@@ -1570,11 +1580,15 @@ def main() -> None:
                     bfig.add_trace(go.Scatter(x=eq.index, y=eq[col], name=col, mode="lines"))
                 bfig.update_layout(
                     template="plotly_dark" if dark else "plotly_white",
-                    height=300, margin=dict(l=40, r=20, t=20, b=25),
-                    hovermode="x unified", legend=dict(orientation="h", y=1.1),
+                    height=210 if compact_chart else 300,
+                    margin=dict(l=30, r=10, t=16, b=20) if compact_chart
+                    else dict(l=40, r=20, t=20, b=25),
+                    hovermode="x unified",
+                    legend=dict(orientation="h", y=1.1, font=dict(size=9 if compact_chart else 12)),
+                    font=dict(size=10 if compact_chart else 12),
                     paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
                 )
-                st.plotly_chart(bfig, use_container_width=True)
+                st.plotly_chart(bfig, use_container_width=True, config={"responsive": True})
                 st.caption(
                     "האסטרטגיה: לונג כשניקוד המגמה ‎+2‎ ומעלה, מחוץ לשוק כשהוא ‎−2‎ ומטה. "
                     "לא כולל עמלות/מיסים, לא כולל שורט, ומבוסס על גרסה מפושטת של הניקוד. "
@@ -1702,8 +1716,9 @@ def main() -> None:
 
     # --- גרפים ---
     with tab_chart:
-        fig = build_chart(df, symbol, dark=dark, lang=chart_lang, chart_type=chart_type)
-        st.plotly_chart(fig, use_container_width=True)
+        fig = build_chart(df, symbol, dark=dark, lang=chart_lang, chart_type=chart_type,
+                          compact=compact_chart)
+        st.plotly_chart(fig, use_container_width=True, config={"responsive": True})
         st.caption(
             "גרף אינטראקטיבי — אפשר להצביע לראות ערכים, לגרור לזום ולהקליק על מקרא. "
             "מוצגים עד 400 ימי המסחר האחרונים. סוג הגרף (קו / נרות) נשלט בסרגל הצד."
@@ -1712,7 +1727,7 @@ def main() -> None:
     # --- השוואה מול מניות אחרות ---
     if tab_cmp is not None:
         with tab_cmp:
-            render_compare(symbol, df, period, compare_syms, dark)
+            render_compare(symbol, df, period, compare_syms, dark, compact=compact_chart)
 
     # --- נתונים גולמיים ---
     with tab_raw:

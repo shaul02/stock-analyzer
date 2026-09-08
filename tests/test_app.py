@@ -133,9 +133,11 @@ def test_crypto_sections():
 @pytest.mark.parametrize("dark", [False, True])
 @pytest.mark.parametrize("lang", ["he", "en"])
 @pytest.mark.parametrize("ct", ["line", "candle"])
-def test_build_chart(df_long, dark, lang, ct):
-    fig = app.build_chart(df_long, "TEST", dark=dark, lang=lang, chart_type=ct)
+@pytest.mark.parametrize("compact", [False, True])
+def test_build_chart(df_long, dark, lang, ct, compact):
+    fig = app.build_chart(df_long, "TEST", dark=dark, lang=lang, chart_type=ct, compact=compact)
     assert len(fig.data) >= 5
+    assert fig.layout.height == (560 if compact else 820)
     fig.to_plotly_json()  # serializes without error
 
 
