@@ -5,7 +5,8 @@ Stock Analyzer - Local Technical & Fundamental Analysis App
 הכל חינמי לחלוטין:
   * הנתונים נשלפים מ-Yahoo Finance דרך הספרייה החינמית yfinance (ללא מפתח API).
   * האינדיקטורים הטכניים מחושבים עם ספריית הקוד הפתוח החינמית ta.
-  * הגרפים מצוירים עם matplotlib.
+  * הגרפים מצוירים עם plotly (אינטראקטיביים, תומכים בעברית ובמצב לילה).
+  * תרגום אופציונלי לעברית דרך deep-translator (שירות חינמי).
 
 הרצה:
     streamlit run app.py
@@ -13,64 +14,134 @@ Stock Analyzer - Local Technical & Fundamental Analysis App
 
 from __future__ import annotations
 
+import json
 import math
 import time
+import urllib.parse
+import urllib.request
 
-import matplotlib
-
-matplotlib.use("Agg")
-
-import matplotlib.pyplot as plt
 import pandas as pd
+import plotly.graph_objects as go
 import streamlit as st
 import yfinance as yf
+from plotly.subplots import make_subplots
 from ta.momentum import RSIIndicator
 from ta.trend import MACD, SMAIndicator
 from ta.volatility import BollingerBands
 
 # עיצוב בסיסי: יישור מימין לשמאל לעברית, מספרים וטבלאות נשארים LTR
-_PAGE_CSS = """
-    <style>
+_BASE_CSS = """
       .stApp { direction: rtl; }
       .stApp h1, .stApp h2, .stApp h3, .stApp h4,
       .stApp p, .stApp label, .stApp .stMarkdown { text-align: right; }
       [data-testid="stMetric"] { direction: ltr; text-align: left; }
-      .stDataFrame, [data-testid="stDataFrame"] { direction: ltr; }
-    </style>
+      [data-testid="stTable"], .stDataFrame, [data-testid="stDataFrame"] { direction: ltr; }
+      [data-testid="stSidebar"] { direction: rtl; text-align: right; }
 """
+
+# שכבת מצב לילה — נדרסת רק כשהמשתמש מדליק אותה
+_DARK_CSS = """
+      :root, .stApp { color-scheme: dark; }
+      .stApp, [data-testid="stAppViewContainer"], [data-testid="stHeader"] {
+          background-color: #0e1117 !important; }
+      [data-testid="stSidebar"] { background-color: #161a23 !important; }
+      .stApp, .stApp h1, .stApp h2, .stApp h3, .stApp h4, .stApp h5,
+      .stApp p, .stApp label, .stApp span, .stApp li, .stApp .stMarkdown,
+      [data-testid="stMetricValue"], [data-testid="stMetricLabel"],
+      .stTabs [data-baseweb="tab"] { color: #e6e6e6 !important; }
+      [data-testid="stTable"] table { color: #e6e6e6 !important; }
+      [data-testid="stTable"] th, [data-testid="stTable"] td {
+          border-color: #2a2f3a !important; }
+      [data-testid="stDataFrame"] { filter: invert(0.92) hue-rotate(180deg); }
+      /* שדות קלט וכפתורים */
+      [data-testid="stTextInput"] input, [data-baseweb="select"] > div,
+      [data-baseweb="input"], [data-baseweb="base-input"] {
+          background-color: #1c212b !important; color: #e6e6e6 !important;
+          border-color: #2a2f3a !important; }
+      [data-testid="stTextInput"] input::placeholder { color: #8a93a3 !important; }
+      [data-testid="baseButton-secondary"], [data-testid="stFormSubmitButton"] button {
+          background-color: #1c212b !important; color: #e6e6e6 !important;
+          border-color: #2a2f3a !important; }
+      [data-testid="stExpander"] { border-color: #2a2f3a !important; }
+"""
+
+
+def _page_css(dark: bool) -> str:
+    return f"<style>{_BASE_CSS}{_DARK_CSS if dark else ''}</style>"
+
+
+# ----------------------------------------------------------------------------
+# פענוח שם חברה -> סימול (כדי לקבל גם "NVIDIA" ולא רק "NVDA")
+# משתמש בנקודת החיפוש הציבורית והחינמית של Yahoo (ללא מפתח).
+# ----------------------------------------------------------------------------
+@st.cache_data(ttl=86400, show_spinner=False)
+def resolve_symbol(query: str):
+    """מחזיר (symbol, shortname) עבור טקסט חופשי, או (None, None) אם לא נמצא."""
+    q = (query or "").strip()
+    if not q:
+        return None, None
+    url = "https://query2.finance.yahoo.com/v1/finance/search?" + urllib.parse.urlencode(
+        {"q": q, "quotesCount": 5, "newsCount": 0}
+    )
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        for item in data.get("quotes", []):
+            sym = item.get("symbol")
+            if sym and item.get("quoteType") in (None, "EQUITY", "ETF", "INDEX", "CRYPTOCURRENCY", "MUTUALFUND"):
+                return sym, item.get("shortname") or item.get("longname")
+        if data.get("quotes"):
+            first = data["quotes"][0]
+            return first.get("symbol"), first.get("shortname")
+    except Exception:
+        pass
+    return None, None
 
 
 # ----------------------------------------------------------------------------
 # שליפת נתונים (עם מטמון של שעה כדי לא להעמיס על השרת)
 # ----------------------------------------------------------------------------
-@st.cache_data(ttl=3600, show_spinner=False)
-def load_data(symbol: str, period: str, _attempts: int = 3):
-    """מחזיר (DataFrame היסטורי, dict מידע על החברה).
-
-    ל-Yahoo יש לעיתים שגיאות רשת חולפות (crumb/SSL) — מנסים שוב עד 3 פעמים.
-    """
-    hist = None
-    last_err = None
-    for i in range(_attempts):
+def _fetch_history(symbol: str, period: str, attempts: int = 3):
+    """מחזיר (DataFrame או None, שגיאה אחרונה). מנסה שוב על שגיאות רשת חולפות."""
+    hist, last_err = None, None
+    for i in range(attempts):
         try:
-            ticker = yf.Ticker(symbol)
-            hist = ticker.history(period=period, interval="1d", auto_adjust=False)
+            hist = yf.Ticker(symbol).history(period=period, interval="1d", auto_adjust=False)
             if hist is not None and not hist.empty:
-                hist = hist.dropna(subset=["Close"])
-                break
+                return hist.dropna(subset=["Close"]), None
         except Exception as err:  # noqa: BLE001 - כל שגיאת רשת נחשבת חולפת
             last_err = err
         time.sleep(1.5 * (i + 1))
+    return (hist if hist is not None else None), last_err
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_data(symbol: str, period: str):
+    """מחזיר (hist, info, err, used_symbol, resolved_name).
+
+    אם הסימול שהוזן לא קיים, מנסה לפענח שם חברה (למשל 'NVIDIA' -> 'NVDA').
+    """
+    used = (symbol or "").strip().upper()
+    hist, err = _fetch_history(used, period)
+
+    resolved_name = None
+    if hist is None or hist.empty:
+        alt_sym, alt_name = resolve_symbol(symbol)
+        if alt_sym and alt_sym.upper() != used:
+            hist2, err2 = _fetch_history(alt_sym, period)
+            if hist2 is not None and not hist2.empty:
+                used, hist, err, resolved_name = alt_sym.upper(), hist2, None, alt_name
 
     if hist is None or hist.empty:
-        return (hist if hist is not None else None), {}, last_err
+        return None, {}, err, used, None
 
     try:
-        info = yf.Ticker(symbol).info or {}
+        info = yf.Ticker(used).info or {}
     except Exception:
         info = {}
 
-    return hist, info, None
+    return hist, info, None, used, resolved_name
 
 
 # ----------------------------------------------------------------------------
@@ -108,6 +179,30 @@ def fmt(value, suffix: str = "", pct: bool = False, digits: int = 2) -> str:
 
 def is_num(x) -> bool:
     return x is not None and not (isinstance(x, float) and math.isnan(x))
+
+
+# ----------------------------------------------------------------------------
+# תרגום אופציונלי לעברית (שירות חינמי, ללא מפתח). נכשל בשקט -> מחזיר מקור.
+# ----------------------------------------------------------------------------
+@st.cache_data(ttl=86400, show_spinner=False)
+def translate_he(text: str) -> str:
+    text = (text or "").strip()
+    if not text:
+        return ""
+    try:
+        from deep_translator import GoogleTranslator
+
+        out = GoogleTranslator(source="auto", target="iw").translate(text[:4800])
+        return out or text
+    except Exception:
+        return text
+
+
+def maybe_he(text, enabled: bool):
+    """מתרגם רק אם המתג דלוק ויש טקסט לא-ריק."""
+    if enabled and text:
+        return translate_he(str(text))
+    return text
 
 
 # ----------------------------------------------------------------------------
@@ -242,11 +337,11 @@ def technical_summary(df: pd.DataFrame):
         rows.append({"אינדיקטור": "רצועות בולינגר", "איתות": "—", "פירוש": "אין מספיק נתונים"})
 
     if score >= 2:
-        verdict, icon, kind = "Bullish — מגמה חיובית", "🟢", "success"
+        verdict, icon, kind = "מגמה חיובית (Bullish)", "🟢", "success"
     elif score <= -2:
-        verdict, icon, kind = "Bearish — מגמה שלילית", "🔴", "error"
+        verdict, icon, kind = "מגמה שלילית (Bearish)", "🔴", "error"
     else:
-        verdict, icon, kind = "Neutral — ניטרלי", "🟡", "info"
+        verdict, icon, kind = "ניטרלי (Neutral)", "🟡", "info"
 
     return verdict, icon, kind, score, pd.DataFrame(rows)
 
@@ -514,56 +609,71 @@ def buy_recommendation(df: pd.DataFrame, info: dict, pe):
 
 
 # ----------------------------------------------------------------------------
-# בניית הגרף (תוויות באנגלית כדי שכל הפונטים ירונדרו כראוי)
+# בניית הגרף — Plotly (אינטראקטיבי, תומך עברית + מצב לילה)
 # ----------------------------------------------------------------------------
-def build_chart(df: pd.DataFrame, symbol: str):
-    plot_df = df.tail(400)
+_CHART_TXT = {
+    "he": {"close": "מחיר סגירה", "sma": "ממוצע {n}", "bb": "רצועות בולינגר",
+           "vol": "מחזור", "title": "{sym} — מחיר ואינדיקטורים"},
+    "en": {"close": "Close", "sma": "SMA {n}", "bb": "Bollinger (20,2)",
+           "vol": "Volume", "title": "{sym} — Price & Indicators"},
+}
 
-    fig, (ax_price, ax_vol, ax_rsi, ax_macd) = plt.subplots(
-        4, 1, figsize=(12, 11), sharex=True,
-        gridspec_kw={"height_ratios": [3, 0.8, 1, 1]},
+
+def build_chart(df: pd.DataFrame, symbol: str, dark: bool = False, lang: str = "he"):
+    d = df.tail(400)
+    t = _CHART_TXT["en" if lang == "en" else "he"]
+
+    fig = make_subplots(
+        rows=4, cols=1, shared_xaxes=True, vertical_spacing=0.04,
+        row_heights=[0.5, 0.13, 0.18, 0.19],
+        subplot_titles=(t["title"].format(sym=symbol), t["vol"], "RSI (14)", "MACD (12,26,9)"),
     )
 
-    # --- מחיר + ממוצעים נעים + בולינגר ---
-    ax_price.plot(plot_df.index, plot_df["Close"], label="Close", color="#1f77b4", linewidth=1.5)
-    for col, color in (("SMA50", "#ff7f0e"), ("SMA100", "#2ca02c"), ("SMA200", "#d62728")):
-        if plot_df[col].notna().any():
-            ax_price.plot(plot_df.index, plot_df[col], label=col, linewidth=1.1, color=color)
-    if plot_df["BB_high"].notna().any():
-        ax_price.plot(plot_df.index, plot_df["BB_high"], color="#9467bd", linewidth=0.8, alpha=0.6)
-        ax_price.plot(plot_df.index, plot_df["BB_low"], color="#9467bd", linewidth=0.8, alpha=0.6)
-        ax_price.fill_between(plot_df.index, plot_df["BB_low"], plot_df["BB_high"],
-                             color="#9467bd", alpha=0.08, label="Bollinger (20,2)")
-    ax_price.set_title(f"{symbol} — Price & Indicators")
-    ax_price.set_ylabel("Price")
-    ax_price.legend(loc="upper left", fontsize=8, ncol=2)
-    ax_price.grid(alpha=0.3)
+    fig.add_trace(go.Scatter(x=d.index, y=d["Close"], name=t["close"],
+                             line=dict(color="#1f77b4", width=1.7)), row=1, col=1)
+    for n, col, color in ((50, "SMA50", "#ff7f0e"), (100, "SMA100", "#2ca02c"),
+                          (200, "SMA200", "#d62728")):
+        if d[col].notna().any():
+            fig.add_trace(go.Scatter(x=d.index, y=d[col], name=t["sma"].format(n=n),
+                                     line=dict(color=color, width=1.1)), row=1, col=1)
+    if d["BB_high"].notna().any():
+        fig.add_trace(go.Scatter(x=d.index, y=d["BB_high"], name=t["bb"],
+                                 line=dict(color="#9467bd", width=0.6),
+                                 showlegend=False, hoverinfo="skip"), row=1, col=1)
+        fig.add_trace(go.Scatter(x=d.index, y=d["BB_low"], name=t["bb"],
+                                 line=dict(color="#9467bd", width=0.6),
+                                 fill="tonexty", fillcolor="rgba(148,103,189,0.13)",
+                                 hoverinfo="skip"), row=1, col=1)
 
-    # --- ווליום ---
-    ax_vol.bar(plot_df.index, plot_df["Volume"], color="#888888", width=1.0)
-    ax_vol.set_ylabel("Volume")
-    ax_vol.grid(alpha=0.3)
+    fig.add_trace(go.Bar(x=d.index, y=d["Volume"], name=t["vol"],
+                         marker_color="#8c8c8c", showlegend=False), row=2, col=1)
 
-    # --- RSI ---
-    ax_rsi.plot(plot_df.index, plot_df["RSI"], color="#8c564b", linewidth=1.2)
-    ax_rsi.axhline(70, color="#d62728", linestyle="--", linewidth=0.8)
-    ax_rsi.axhline(30, color="#2ca02c", linestyle="--", linewidth=0.8)
-    ax_rsi.set_ylim(0, 100)
-    ax_rsi.set_ylabel("RSI (14)")
-    ax_rsi.grid(alpha=0.3)
+    fig.add_trace(go.Scatter(x=d.index, y=d["RSI"], name="RSI",
+                             line=dict(color="#8c564b", width=1.4), showlegend=False),
+                  row=3, col=1)
+    fig.add_hline(y=70, line=dict(color="#d62728", dash="dash", width=0.8), row=3, col=1)
+    fig.add_hline(y=30, line=dict(color="#2ca02c", dash="dash", width=0.8), row=3, col=1)
+    fig.update_yaxes(range=[0, 100], row=3, col=1)
 
-    # --- MACD ---
-    ax_macd.plot(plot_df.index, plot_df["MACD"], color="#1f77b4", linewidth=1.2, label="MACD")
-    ax_macd.plot(plot_df.index, plot_df["MACD_signal"], color="#ff7f0e", linewidth=1.2, label="Signal")
-    hist = plot_df["MACD_hist"].fillna(0)
-    ax_macd.bar(plot_df.index, hist, width=1.0, alpha=0.5,
-                color=["#2ca02c" if v >= 0 else "#d62728" for v in hist])
-    ax_macd.axhline(0, color="black", linewidth=0.6)
-    ax_macd.set_ylabel("MACD (12,26,9)")
-    ax_macd.legend(loc="upper left", fontsize=8)
-    ax_macd.grid(alpha=0.3)
+    fig.add_trace(go.Scatter(x=d.index, y=d["MACD"], name="MACD",
+                             line=dict(color="#1f77b4", width=1.4), showlegend=False),
+                  row=4, col=1)
+    fig.add_trace(go.Scatter(x=d.index, y=d["MACD_signal"], name="Signal",
+                             line=dict(color="#ff7f0e", width=1.4), showlegend=False),
+                  row=4, col=1)
+    hist = d["MACD_hist"].fillna(0)
+    fig.add_trace(go.Bar(x=d.index, y=hist, name="Histogram", showlegend=False,
+                         marker_color=["#2ca02c" if v >= 0 else "#d62728" for v in hist]),
+                  row=4, col=1)
 
-    fig.tight_layout()
+    fig.update_layout(
+        template="plotly_dark" if dark else "plotly_white",
+        height=830, bargap=0,
+        margin=dict(l=40, r=20, t=55, b=30),
+        legend=dict(orientation="h", yanchor="bottom", y=1.03, xanchor="left", x=0),
+        hovermode="x unified",
+        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+    )
     return fig
 
 
@@ -572,7 +682,25 @@ def build_chart(df: pd.DataFrame, symbol: str):
 # ----------------------------------------------------------------------------
 def main() -> None:
     st.set_page_config(page_title="מנתח מניות", page_icon="📈", layout="wide")
-    st.markdown(_PAGE_CSS, unsafe_allow_html=True)
+
+    with st.sidebar:
+        st.markdown("### ⚙️ הגדרות תצוגה")
+        dark = st.toggle("🌙 מצב לילה", key="dark_mode")
+        eng_chart = st.toggle(
+            "תוויות גרף באנגלית", key="eng_chart",
+            help="כברירת מחדל תוויות הגרף בעברית. הדלקה מציגה Close / SMA / Volume וכו'.",
+        )
+        translate_on = st.toggle(
+            "🌐 תרגם טקסטים מאנגלית לעברית", key="translate_on",
+            help="מתרגם סקטור, תעשייה ותיאור החברה. שירות חינמי — לעיתים איטי או לא זמין.",
+        )
+        st.caption(
+            "למצב לילה מלא של המערכת: תפריט ☰ בפינה הימנית העליונה → "
+            "Settings → Theme → Dark."
+        )
+
+    st.markdown(_page_css(dark), unsafe_allow_html=True)
+    chart_lang = "en" if eng_chart else "he"
 
     st.title("📈 מנתח מניות — ניתוח טכני ופיננסי")
     st.caption(
@@ -584,8 +712,8 @@ def main() -> None:
         c1, c2, c3 = st.columns([3, 1, 1])
         with c1:
             symbol_input = st.text_input(
-                "סימול מניה", value="AAPL",
-                placeholder="לדוגמה: AAPL, TSLA, MSFT, NVDA, GOOGL",
+                "סימול מניה או שם חברה", value="AAPL",
+                placeholder="לדוגמה: AAPL · TSLA · NVDA · או שם: NVIDIA, Apple",
             )
         with c2:
             period = st.selectbox(
@@ -597,7 +725,7 @@ def main() -> None:
 
     if submitted:
         st.session_state["run"] = True
-        st.session_state["symbol"] = (symbol_input or "").strip().upper()
+        st.session_state["symbol"] = (symbol_input or "").strip()
         st.session_state["period"] = period
 
     if st.session_state.get("run"):
@@ -607,7 +735,7 @@ def main() -> None:
             st.rerun()
 
     if not st.session_state.get("run"):
-        st.info("הזן סימול מניה למעלה ולחץ על **נתח מניה**.")
+        st.info("הזן סימול מניה (או שם חברה) למעלה ולחץ על **נתח מניה**.")
         st.stop()
 
     symbol = st.session_state["symbol"]
@@ -618,17 +746,22 @@ def main() -> None:
         st.stop()
 
     with st.spinner(f"טוען נתונים עבור {symbol}…"):
-        hist, info, load_err = load_data(symbol, period)
+        hist, info, load_err, used_symbol, resolved_name = load_data(symbol, period)
 
     if hist is None or hist.empty:
         st.error(
             f"לא הצלחתי לשלוף נתונים עבור '{symbol}'.\n\n"
-            "אפשרויות: הסימול שגוי / אין חיבור אינטרנט / Yahoo Finance חוסם זמנית. "
+            "בדוק שהזנת **סימול** תקין (למשל `NVDA` ולא `NVIDIA`, `META` ולא `Facebook`), "
+            "או נסה להקליד את שם החברה במלואו. ייתכן גם ש-Yahoo חוסם זמנית — "
             "המתן דקה ולחץ שוב על 'נתח מניה'."
         )
         if load_err:
             st.caption(f"פרטי שגיאה: {load_err}")
         st.stop()
+
+    symbol = used_symbol
+    if resolved_name:
+        st.success(f"לא נמצא הסימול שהוזן — מוצג במקומו **{used_symbol}** ({resolved_name}).")
 
     df = add_indicators(hist)
     latest = df.iloc[-1]
@@ -646,6 +779,8 @@ def main() -> None:
 
     company_name = info.get("longName") or info.get("shortName") or symbol
     currency = info.get("currency", "")
+    sector = maybe_he(info.get("sector"), translate_on)
+    industry = maybe_he(info.get("industry"), translate_on)
 
     # --- שורת מדדים עליונה ---
     m1, m2, m3, m4 = st.columns(4)
@@ -668,9 +803,7 @@ def main() -> None:
     # --- סקירה כללית ---
     with tab_overview:
         st.subheader(company_name)
-        meta = " · ".join(
-            p for p in [info.get("sector"), info.get("industry"), info.get("exchange")] if p
-        )
+        meta = " · ".join(p for p in [sector, industry, info.get("exchange")] if p)
         if meta:
             st.write(meta)
 
@@ -683,7 +816,9 @@ def main() -> None:
         summary = info.get("longBusinessSummary")
         if summary:
             with st.expander("תיאור החברה"):
-                st.write(summary)
+                st.write(maybe_he(summary, translate_on))
+                if not translate_on:
+                    st.caption("להצגה בעברית: הדלק 'תרגם טקסטים' בסרגל הצד.")
 
     # --- כדאיות קנייה לפי טווח ---
     with tab_reco:
@@ -723,8 +858,8 @@ def main() -> None:
         div_yield = info.get("dividendYield")
         fundamentals = {
             "שם החברה": company_name,
-            "סקטור": info.get("sector", "—"),
-            "תעשייה": info.get("industry", "—"),
+            "סקטור": sector or "—",
+            "תעשייה": industry or "—",
             "בורסה": info.get("exchange", "—"),
             "מטבע": currency or "—",
             "מחיר נוכחי": fmt(info.get("currentPrice") or price),
@@ -784,10 +919,12 @@ def main() -> None:
 
     # --- גרפים ---
     with tab_chart:
-        fig = build_chart(df, symbol)
-        st.pyplot(fig, use_container_width=True)
-        plt.close(fig)
-        st.caption("הגרף מציג עד 400 ימי המסחר האחרונים.")
+        fig = build_chart(df, symbol, dark=dark, lang=chart_lang)
+        st.plotly_chart(fig, use_container_width=True)
+        st.caption(
+            "גרף אינטראקטיבי — אפשר להצביע לראות ערכים, לגרור לזום ולהקליק על מקרא. "
+            "מוצגים עד 400 ימי המסחר האחרונים."
+        )
 
     # --- נתונים גולמיים ---
     with tab_raw:
