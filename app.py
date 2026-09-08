@@ -252,6 +252,268 @@ def technical_summary(df: pd.DataFrame):
 
 
 # ----------------------------------------------------------------------------
+# תבנית כדאיות קנייה לפי טווח (קצר / בינוני / ארוך)
+# סיכום כלל-אצבע אוטומטי של האיתותים — אינו ייעוץ השקעות!
+# ----------------------------------------------------------------------------
+def _series_change(series: pd.Series, lookback: int):
+    """שינוי באחוזים על פני `lookback` ברים אחרונים, או None אם אין מספיק נתונים."""
+    s = series.dropna()
+    if len(s) <= lookback or s.iloc[-1 - lookback] == 0:
+        return None
+    return (s.iloc[-1] / s.iloc[-1 - lookback] - 1) * 100
+
+
+def _slope(series: pd.Series, lookback: int):
+    """כיוון הממוצע: חיובי אם עלה על פני `lookback` ברים, שלילי אם ירד."""
+    s = series.dropna()
+    if len(s) <= lookback:
+        return None
+    return s.iloc[-1] - s.iloc[-1 - lookback]
+
+
+def _label(score: int):
+    if score >= 2:
+        return "חיובי", "▲", "🟢"
+    if score <= -2:
+        return "שלילי", "▼", "🔴"
+    return "ניטרלי", "◆", "🟡"
+
+
+def _horizon_short(df: pd.DataFrame):
+    """טווח קצר (ימים עד שבועות ספורים) — מומנטום ותנודתיות."""
+    latest = df.iloc[-1]
+    price = float(latest["Close"])
+    reasons, score = [], 0
+
+    bb_mid = latest.get("BB_mid")  # ממוצע 20 יום
+    if is_num(bb_mid):
+        if price > bb_mid:
+            score += 1
+            reasons.append(("המחיר מעל ממוצע 20 יום", "▲"))
+        else:
+            score -= 1
+            reasons.append(("המחיר מתחת לממוצע 20 יום", "▼"))
+
+    hist = df["MACD_hist"].dropna()
+    if len(hist) >= 2:
+        if hist.iloc[-1] > 0 and hist.iloc[-1] >= hist.iloc[-2]:
+            score += 1
+            reasons.append(("מומנטום MACD חיובי ומתחזק", "▲"))
+        elif hist.iloc[-1] < 0 and hist.iloc[-1] <= hist.iloc[-2]:
+            score -= 1
+            reasons.append(("מומנטום MACD שלילי ומתחזק כלפי מטה", "▼"))
+        else:
+            reasons.append(("מומנטום MACD מעורב", "◆"))
+
+    rsi = latest.get("RSI")
+    if is_num(rsi):
+        if rsi < 30:
+            score += 1
+            reasons.append((f"RSI = {rsi:.0f} — מכירת יתר, אפשרות לתיקון מעלה", "▲"))
+        elif rsi > 70:
+            score -= 1
+            reasons.append((f"RSI = {rsi:.0f} — קניית יתר, סיכון לתיקון מטה", "▼"))
+        elif rsi >= 50:
+            score += 1
+            reasons.append((f"RSI = {rsi:.0f} — חיובי בלי קיצון", "▲"))
+        else:
+            reasons.append((f"RSI = {rsi:.0f} — חלש", "◆"))
+
+    chg5 = _series_change(df["Close"], 5)
+    if chg5 is not None:
+        if chg5 > 2:
+            score += 1
+            reasons.append((f"עלייה של {chg5:+.1f}% ב-5 ימי מסחר אחרונים", "▲"))
+        elif chg5 < -2:
+            score -= 1
+            reasons.append((f"ירידה של {chg5:+.1f}% ב-5 ימי מסחר אחרונים", "▼"))
+
+    bb_high, bb_low = latest.get("BB_high"), latest.get("BB_low")
+    if is_num(bb_high) and is_num(bb_low) and bb_high > bb_low:
+        pctb = (price - bb_low) / (bb_high - bb_low)
+        if pctb < 0.2:
+            score += 1
+            reasons.append(("המחיר קרוב לרצועת בולינגר התחתונה", "▲"))
+        elif pctb > 0.9:
+            score -= 1
+            reasons.append(("המחיר קרוב לרצועת בולינגר העליונה", "▼"))
+
+    return score, reasons
+
+
+def _horizon_medium(df: pd.DataFrame):
+    """טווח בינוני (שבועות עד מספר חודשים) — מגמה נוכחית."""
+    latest = df.iloc[-1]
+    price = float(latest["Close"])
+    reasons, score = [], 0
+
+    for win in (50, 100):
+        sma = latest.get(f"SMA{win}")
+        if is_num(sma):
+            if price > sma:
+                score += 1
+                reasons.append((f"המחיר מעל ממוצע {win} יום", "▲"))
+            else:
+                score -= 1
+                reasons.append((f"המחיר מתחת לממוצע {win} יום", "▼"))
+
+    sl = _slope(df["SMA50"], 10)
+    if sl is not None:
+        if sl > 0:
+            score += 1
+            reasons.append(("ממוצע 50 יום במגמת עלייה", "▲"))
+        else:
+            score -= 1
+            reasons.append(("ממוצע 50 יום במגמת ירידה", "▼"))
+
+    sma50, sma100 = latest.get("SMA50"), latest.get("SMA100")
+    if is_num(sma50) and is_num(sma100):
+        if sma50 > sma100:
+            score += 1
+            reasons.append(("ממוצע 50 מעל ממוצע 100", "▲"))
+        else:
+            score -= 1
+            reasons.append(("ממוצע 50 מתחת לממוצע 100", "▼"))
+
+    macd = latest.get("MACD")
+    if is_num(macd):
+        if macd > 0:
+            score += 1
+            reasons.append(("MACD מעל קו האפס", "▲"))
+        else:
+            score -= 1
+            reasons.append(("MACD מתחת לקו האפס", "▼"))
+
+    chg21 = _series_change(df["Close"], 21)
+    if chg21 is not None:
+        if chg21 > 3:
+            score += 1
+            reasons.append((f"עלייה של {chg21:+.1f}% בחודש האחרון", "▲"))
+        elif chg21 < -3:
+            score -= 1
+            reasons.append((f"ירידה של {chg21:+.1f}% בחודש האחרון", "▼"))
+
+    return score, reasons
+
+
+def _horizon_long(df: pd.DataFrame, info: dict, pe):
+    """טווח ארוך (מספר חודשים עד שנים) — מגמת-על והערכת שווי."""
+    latest = df.iloc[-1]
+    price = float(latest["Close"])
+    reasons, score = [], 0
+
+    sma200 = latest.get("SMA200")
+    if is_num(sma200):
+        if price > sma200:
+            score += 1
+            reasons.append(("המחיר מעל ממוצע 200 יום", "▲"))
+        else:
+            score -= 1
+            reasons.append(("המחיר מתחת לממוצע 200 יום", "▼"))
+        if price > sma200 * 1.4:
+            score -= 1
+            reasons.append(("המחיר מתוח מאוד מעל ממוצע 200 יום (סיכון תיקון)", "▼"))
+
+    sma50 = latest.get("SMA50")
+    if is_num(sma50) and is_num(sma200):
+        if sma50 > sma200:
+            score += 1
+            reasons.append(("'צלב זהב' — ממוצע 50 מעל ממוצע 200", "▲"))
+        else:
+            score -= 1
+            reasons.append(("'צלב מוות' — ממוצע 50 מתחת לממוצע 200", "▼"))
+
+    sl = _slope(df["SMA200"], 21)
+    if sl is not None:
+        if sl > 0:
+            score += 1
+            reasons.append(("ממוצע 200 יום במגמת עלייה", "▲"))
+        else:
+            score -= 1
+            reasons.append(("ממוצע 200 יום במגמת ירידה", "▼"))
+
+    hi = info.get("fiftyTwoWeekHigh")
+    lo = info.get("fiftyTwoWeekLow")
+    if is_num(hi) and hi and price >= hi * 0.85:
+        score += 1
+        reasons.append(("קרוב לשיא 52 שבועות — מגמה חזקה", "▲"))
+    elif is_num(lo) and lo and price <= lo * 1.1:
+        score -= 1
+        reasons.append(("קרוב לשפל 52 שבועות — חולשה", "▼"))
+
+    if pe is not None:
+        if pe <= 0:
+            score -= 1
+            reasons.append(("החברה מפסידה (P/E שלילי)", "▼"))
+        elif pe <= 25:
+            score += 1
+            reasons.append((f"מכפיל רווח סביר (P/E ≈ {pe:.0f})", "▲"))
+        elif pe <= 40:
+            reasons.append((f"מכפיל רווח גבוה (P/E ≈ {pe:.0f})", "◆"))
+        else:
+            score -= 1
+            reasons.append((f"מכפיל רווח גבוה מאוד (P/E ≈ {pe:.0f})", "▼"))
+
+    peg = info.get("pegRatio")
+    if is_num(peg):
+        if 0 < peg < 1:
+            score += 1
+            reasons.append((f"PEG ≈ {peg:.2f} — צמיחה אטרקטיבית מול המחיר", "▲"))
+        elif peg > 2.5:
+            score -= 1
+            reasons.append((f"PEG ≈ {peg:.2f} — יקר יחסית לצמיחה", "▼"))
+
+    return score, reasons
+
+
+HORIZON_META = {
+    "קצר": "ימים עד שבועות ספורים",
+    "בינוני": "שבועות עד מספר חודשים",
+    "ארוך": "מספר חודשים עד שנים",
+}
+
+
+def buy_recommendation(df: pd.DataFrame, info: dict, pe):
+    """מחזיר dict עם פסק כללי + פירוט לכל טווח. סיכום אוטומטי, לא ייעוץ."""
+    horizons = {}
+    for name, (sc, reasons) in {
+        "קצר": _horizon_short(df),
+        "בינוני": _horizon_medium(df),
+        "ארוך": _horizon_long(df, info, pe),
+    }.items():
+        text, arrow, dot = _label(sc)
+        horizons[name] = {
+            "label": text, "arrow": arrow, "dot": dot,
+            "score": sc, "reasons": reasons,
+            "range": HORIZON_META[name],
+        }
+
+    positives = [n for n, h in horizons.items() if h["label"] == "חיובי"]
+    negatives = [n for n, h in horizons.items() if h["label"] == "שלילי"]
+
+    if positives:
+        answer = "כן — האיתותים תומכים בקנייה"
+        kind = "success"
+        horizon_txt = "טווח " + " + ".join(positives)
+    elif negatives and not positives:
+        answer = "לא כרגע — האיתותים הטכניים שליליים"
+        kind = "error"
+        horizon_txt = "—"
+    else:
+        answer = "לא חד-משמעי — עדיף להמתין לאיתות ברור"
+        kind = "info"
+        horizon_txt = "—"
+
+    return {
+        "answer": answer,
+        "kind": kind,
+        "horizon_txt": horizon_txt,
+        "positives": positives,
+        "horizons": horizons,
+    }
+
+
+# ----------------------------------------------------------------------------
 # בניית הגרף (תוויות באנגלית כדי שכל הפונטים ירונדרו כראוי)
 # ----------------------------------------------------------------------------
 def build_chart(df: pd.DataFrame, symbol: str):
@@ -338,6 +600,12 @@ def main() -> None:
         st.session_state["symbol"] = (symbol_input or "").strip().upper()
         st.session_state["period"] = period
 
+    if st.session_state.get("run"):
+        if st.button("↺ ניתוח מניה חדשה (איפוס)"):
+            for _k in ("run", "symbol", "period"):
+                st.session_state.pop(_k, None)
+            st.rerun()
+
     if not st.session_state.get("run"):
         st.info("הזן סימול מניה למעלה ולחץ על **נתח מניה**.")
         st.stop()
@@ -374,6 +642,7 @@ def main() -> None:
 
     pe, pe_source = pe_ratio(info, info.get("currentPrice") or price)
     verdict, icon, kind, score, signals_df = technical_summary(df)
+    reco = buy_recommendation(df, info, pe)
 
     company_name = info.get("longName") or info.get("shortName") or symbol
     currency = info.get("currency", "")
@@ -391,8 +660,9 @@ def main() -> None:
             "מומלץ לבחור טווח של שנתיים ומעלה."
         )
 
-    tab_overview, tab_fund, tab_tech, tab_chart, tab_raw = st.tabs(
-        ["🧭 סקירה כללית", "💰 נתונים פיננסיים", "📊 ניתוח טכני", "📈 גרפים", "🗂 נתונים גולמיים"]
+    tab_overview, tab_reco, tab_fund, tab_tech, tab_chart, tab_raw = st.tabs(
+        ["🧭 סקירה כללית", "🧠 כדאיות קנייה", "💰 נתונים פיננסיים",
+         "📊 ניתוח טכני", "📈 גרפים", "🗂 נתונים גולמיים"]
     )
 
     # --- סקירה כללית ---
@@ -405,11 +675,41 @@ def main() -> None:
             st.write(meta)
 
         getattr(st, kind)(f"{icon}  סיכום טכני אוטומטי: **{verdict}**  (ניקוד: {score:+d})")
+        getattr(st, reco["kind"])(
+            f"🧠  שווה לקנות? **{reco['answer']}**"
+            + (f"  ·  {reco['horizon_txt']}" if reco["positives"] else "")
+        )
 
         summary = info.get("longBusinessSummary")
         if summary:
             with st.expander("תיאור החברה"):
                 st.write(summary)
+
+    # --- כדאיות קנייה לפי טווח ---
+    with tab_reco:
+        getattr(st, reco["kind"])(f"🧠  שווה לקנות?  **{reco['answer']}**")
+        if reco["positives"]:
+            st.markdown(f"**טווח מומלץ לפי הניתוח:** {reco['horizon_txt']}")
+        st.caption(
+            "הפסק נקבע אוטומטית מתוך שקלול האיתותים בכל טווח: כל טווח שמקבל ניקוד ‎+2‎ "
+            "ומעלה נחשב 'חיובי'. אם לפחות טווח אחד חיובי — התשובה 'כן', עם ציון הטווחים."
+        )
+
+        cols = st.columns(3)
+        for col, (name, h) in zip(cols, reco["horizons"].items()):
+            with col:
+                st.markdown(f"### {h['dot']} טווח {name}")
+                st.caption(h["range"])
+                st.markdown(f"**{h['label']} {h['arrow']}**  ·  ניקוד {h['score']:+d}")
+                for text, arrow in h["reasons"]:
+                    st.markdown(f"- {arrow} {text}")
+                if not h["reasons"]:
+                    st.markdown("- אין מספיק נתונים")
+
+        st.warning(
+            "⚠️ זהו סיכום טכני אוטומטי בלבד ואינו ייעוץ השקעות, המלצה אישית או הבטחה לתשואה. "
+            "אינדיקטורים מתארים את העבר וההווה ואינם חוזים את העתיד. החלטות השקעה הן באחריותך."
+        )
 
     # --- נתונים פיננסיים ---
     with tab_fund:
